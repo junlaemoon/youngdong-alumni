@@ -203,6 +203,14 @@ main#app{padding:16px 16px 4px;}
 .pill{font-size:11px; background:rgba(255,255,255,.14); padding:5px 10px; border-radius:20px;}
 
 .req-row{display:flex; align-items:center; justify-content:space-between; padding:10px 0; border-bottom:1px solid var(--line);}
+.p-table-head{display:flex; align-items:center; gap:8px; padding:6px 4px; font-size:11px; font-weight:700; color:var(--ink-soft); border-bottom:1px solid var(--line);}
+.p-table-head .col-name{flex:1.3;}
+.p-table-head .col-sub{flex:1.5;}
+.p-table-head .col-att{flex:0.8; text-align:right;}
+.p-table-row{display:flex; align-items:center; gap:8px; padding:9px 4px 2px; font-size:12.5px;}
+.p-table-row .col-name{flex:1.3; font-weight:600; cursor:pointer;}
+.p-table-row .col-sub{flex:1.5; color:var(--ink-soft); overflow:hidden; text-overflow:ellipsis; white-space:nowrap;}
+.p-table-row .col-att{flex:0.8; text-align:right;}
 .req-row:last-child{border-bottom:none;}
 .req-name{font-size:13.5px; font-weight:600;}
 .req-sub{font-size:11.5px; color:var(--ink-soft);}
@@ -263,7 +271,7 @@ main#app{padding:16px 16px 4px;}
   <footer class="app-footer">
     <div class="footer-divider"></div>
     <p class="footer-brand">Youngdong High School Alumni Association</p>
-    <p class="footer-credit">개발자/제작자 : <b>문준래 · JUNLAE MOON</b></p>
+    <p class="footer-credit">개발·제작·관리 : <b>문준래 JUNLAE MOON</b></p>
     <p class="footer-contact">제휴 · 제안 · 사업 · 기술지원 · 홍보 · 후원 문의 : <a href="mailto:junlae.moon@gmail.com">junlae.moon@gmail.com</a></p>
     <p class="footer-copy">© 2026 영동고등학교 총동문회. All rights reserved.</p>
   </footer>
@@ -275,6 +283,7 @@ main#app{padding:16px 16px 4px;}
 <!-- Firebase (Firestore) -->
 <script src="https://www.gstatic.com/firebasejs/12.11.0/firebase-app-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/12.11.0/firebase-firestore-compat.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
 <script>
   const firebaseConfig = {
     apiKey: "AIzaSyBqD-6J9-ITG8yX0yrTRTpAVKNY-Rmoubg",
@@ -628,6 +637,71 @@ function exportAllData(){
   showToast('백업 파일을 다운로드했어요');
 }
 
+function exportMeetupParticipants(meetupId){
+  const mt = state.meetups.find(m => m.id === meetupId);
+  if(!mt) return;
+  const confirmed = mt.participants.filter(p => p.status === 'confirmed');
+  if(!confirmed.length){ showToast('아직 참가자가 없어요'); return; }
+  const rows = confirmed.map((p, i) => {
+    const m = state.members.find(x => x.id === p.memberId);
+    return {
+      '모임이름': mt.title,
+      '일시': `${mt.date} ${mt.time}`,
+      '장소': mt.location,
+      'No.': i + 1,
+      '기수': m ? (m.batch || '') : '',
+      '이름': m ? m.name : '(탈퇴회원)',
+      '연락처': m ? maskPhone(m.phone) : '',
+    };
+  });
+  const ws = XLSX.utils.json_to_sheet(rows);
+  ws['!cols'] = [{wch:20},{wch:16},{wch:16},{wch:5},{wch:8},{wch:10},{wch:14}];
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws, '참가자명단');
+  XLSX.writeFile(wb, `${mt.title}_참가자명단.xlsx`);
+  showToast('엑셀 파일을 다운로드했어요');
+}
+
+function exportYearlyReport(){
+  const wb = XLSX.utils.book_new();
+
+  const totalAttendance = state.meetups.reduce((sum, mt) => sum + mt.participants.filter(p => p.status === 'confirmed').length, 0);
+  const checkedIn = state.meetups.reduce((sum, mt) => sum + mt.participants.filter(p => p.attended).length, 0);
+  const summary = [
+    { 항목: '총 동문(회원) 수', 값: state.members.length },
+    { 항목: '총 모임 수', 값: state.meetups.length },
+    { 항목: '누적 참석 신청(연인원)', 값: totalAttendance },
+    { 항목: '누적 실제 출석(연인원)', 값: checkedIn },
+    { 항목: '총 공지 수', 값: state.notices.length },
+    { 항목: '총 소식 수', 값: state.posts.length },
+    { 항목: '추출일', 값: ymd(new Date()) },
+  ];
+  XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(summary), '요약');
+
+  const meetupRows = [...state.meetups].sort((a,b)=>(a.date+a.time).localeCompare(b.date+b.time)).map(mt => ({
+    '모임이름': mt.title,
+    '일시': `${mt.date} ${mt.time}`,
+    '장소': mt.location,
+    '확정인원': mt.participants.filter(p=>p.status==='confirmed').length,
+    '대기인원': mt.participants.filter(p=>p.status==='waiting').length,
+    '실제출석': mt.participants.filter(p=>p.attended).length,
+  }));
+  XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(meetupRows), '모임목록');
+
+  const memberRows = state.members.map(m => ({
+    '이름': m.name,
+    '기수': m.batch || '',
+    '연락처': maskPhone(m.phone),
+    '설명': m.intro || '',
+    '가입일': m.joinedAt,
+    '권한': m.role === 'admin' ? '플랫폼관리자' : '동문',
+  }));
+  XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(memberRows), '회원목록');
+
+  XLSX.writeFile(wb, `총동문회_연간리포트_${ymd(new Date())}.xlsx`);
+  showToast('연간 리포트를 다운로드했어요');
+}
+
 /* ---------------------------------------------------------
    공지
 --------------------------------------------------------- */
@@ -685,6 +759,7 @@ function addMeetup(data){
     capacity: Number(data.capacity) || 0,
     hostId: me.id,
     participants: [],
+    attendanceCode: String(Math.floor(1000 + Math.random()*9000)),
     createdAt: Date.now(),
   });
   pendingPostImage = null;
@@ -778,7 +853,7 @@ function joinMeetup(id, subgroup){
   if(!mt) return;
   if(mt.participants.some(p => p.memberId === me.id)){ showToast('이미 신청했어요'); return; }
   const full = mt.capacity > 0 && confirmedCount(mt) >= mt.capacity;
-  mt.participants.push({ memberId: me.id, status: full ? 'waiting' : 'confirmed', appliedAt: Date.now(), wasWaiting: full, notifiedPromotion: true, subgroup: subgroup || null });
+  mt.participants.push({ memberId: me.id, status: full ? 'waiting' : 'confirmed', appliedAt: Date.now(), wasWaiting: full, notifiedPromotion: true, subgroup: subgroup || null, attended: false });
   saveMeetups();
   closeModal();
   showToast(full ? '정원이 가득 차 대기로 신청됐어요' : '신청 완료! 그날 뵈어요');
@@ -813,6 +888,44 @@ function checkMyPromotions(){
     }
   });
   if(changed) saveMeetups();
+}
+
+/* ---------------------------------------------------------
+   출석 체크
+--------------------------------------------------------- */
+function attendanceWindowOpen(mt){
+  const [y,m,d] = mt.date.split('-').map(Number);
+  const [hh,mm] = mt.time.split(':').map(Number);
+  const start = new Date(y, m-1, d, hh, mm).getTime();
+  const now = Date.now();
+  return now >= start - 60*60*1000; // 모임 시작 1시간 전부터 오픈
+}
+function checkInWithCode(meetupId, code){
+  const me = currentMember();
+  if(!me) return;
+  const mt = state.meetups.find(m => m.id === meetupId);
+  if(!mt) return;
+  const p = mt.participants.find(x => x.memberId === me.id);
+  if(!p){ showToast('신청 내역이 없어요'); return; }
+  if(!attendanceWindowOpen(mt)){ showToast('출석체크는 모임 1시간 전부터 가능해요'); return; }
+  if(code.trim() !== mt.attendanceCode){ showToast('출석 코드가 일치하지 않아요'); return; }
+  p.attended = true;
+  p.attendedAt = Date.now();
+  saveMeetups();
+  showToast('출석 확인됐어요, 반가워요! 🙌');
+  renderApp();
+}
+function toggleAttendance(meetupId, memberId){
+  const mt = state.meetups.find(m => m.id === meetupId);
+  if(!mt) return;
+  const p = mt.participants.find(x => x.memberId === memberId);
+  if(!p) return;
+  p.attended = !p.attended;
+  if(p.attended) p.attendedAt = Date.now();
+  saveMeetups();
+  showToast(p.attended ? '출석 처리했어요' : '출석을 취소했어요');
+  const modalRoot = document.getElementById('modal-root');
+  if(modalRoot.innerHTML) openParticipantsModal(meetupId);
 }
 
 /* ---------------------------------------------------------
@@ -1056,19 +1169,53 @@ function openMeetupModal(){
 function openParticipantsModal(id){
   const mt = state.meetups.find(m => m.id === id);
   if(!mt) return;
+  if(!mt.attendanceCode){ mt.attendanceCode = String(Math.floor(1000 + Math.random()*9000)); saveMeetups(); }
   const confirmed = mt.participants.filter(p=>p.status==='confirmed');
   const waiting = mt.participants.filter(p=>p.status==='waiting');
-  const nameOf = mid => memberDisplayName(mid);
-  const rowHtml = p => `
-    <div class="req-row" style="cursor:pointer;" onclick="openMemberProfileModal('${p.memberId}')">
-      <span class="req-name">${nameOf(p.memberId)}${p.subgroup ? ` <span class="req-sub">· ${p.subgroup}</span>` : ''}</span>
-      <span class="link-btn">정보 보기 ›</span>
-    </div>`;
+  const admin = isAdmin();
+  const me = currentMember();
+  const winOpen = attendanceWindowOpen(mt);
+
+  const rowHtml = p => {
+    const attBadge = p.attended ? `<span class="badge badge-open">출석</span>` : `<span class="badge badge-past">미출석</span>`;
+    return `
+      <div class="p-table-row">
+        <span class="col-name" onclick="openMemberProfileModal('${p.memberId}')">${memberDisplayName(p.memberId)}</span>
+        <span class="col-sub">${p.subgroup || '-'}</span>
+        <span class="col-att">${attBadge}</span>
+      </div>
+      ${admin ? `<div style="text-align:right; margin:2px 0 8px;"><button class="btn btn-ghost btn-sm" onclick="toggleAttendance('${mt.id}','${p.memberId}')">${p.attended?'출석 취소':'출석 처리'}</button></div>` : ''}
+    `;
+  };
+
+  const myEntry = me ? mt.participants.find(p=>p.memberId===me.id) : null;
+  let checkinHtml = '';
+  if(winOpen && myEntry && myEntry.status==='confirmed'){
+    checkinHtml = myEntry.attended
+      ? `<div class="card" style="background:#E8EDF6;"><p class="helper" style="margin:0;">✅ 출석 처리됐어요</p></div>`
+      : `<div class="card">
+          <p class="helper" style="margin:0 0 8px;">출석 코드를 입력해주세요 (모임 장소에서 확인)</p>
+          <div class="field"><input id="attCodeInput" inputmode="numeric" maxlength="4" placeholder="0000"></div>
+          <button class="btn btn-accent btn-block" onclick="checkInWithCode('${mt.id}', document.getElementById('attCodeInput').value)">출석 체크</button>
+        </div>`;
+  }
+
+  const adminCodeHtml = (admin && winOpen) ? `
+    <div class="card" style="text-align:center; background:var(--ink); color:#fff;">
+      <p class="helper" style="color:rgba(255,255,255,.7); margin:0 0 4px;">출석 코드 (참가자에게 보여주세요)</p>
+      <p class="disp" style="font-size:28px; font-weight:800; letter-spacing:.1em; margin:0;">${mt.attendanceCode}</p>
+    </div>` : '';
+
+  const exportBtn = admin ? `<button class="btn btn-ghost btn-block" onclick="exportMeetupParticipants('${mt.id}')">⬇ 참가자 명단 엑셀로 내보내기</button>` : '';
+
   openModal(mt.title, `
     <p class="helper">${fmtDateKR(mt.date)} ${mt.time} · ${mt.location}</p>
+    ${adminCodeHtml}
+    ${checkinHtml}
+    ${exportBtn}
     <div class="section-title">확정 (${confirmed.length}${mt.capacity>0 ? '/'+mt.capacity : ''})</div>
-    ${confirmed.length ? confirmed.map(rowHtml).join('') : '<p class="helper">아직 신청자가 없어요</p>'}
-    ${waiting.length ? `<div class="section-title">대기 (${waiting.length})</div>` + waiting.map(rowHtml).join('') : ''}
+    ${confirmed.length ? `<div class="p-table-head"><span class="col-name">이름</span><span class="col-sub">소그룹</span><span class="col-att">출석</span></div>` + confirmed.map(rowHtml).join('') : '<p class="helper">아직 신청자가 없어요</p>'}
+    ${waiting.length ? `<div class="section-title">대기 (${waiting.length})</div><div class="p-table-head"><span class="col-name">이름</span><span class="col-sub">소그룹</span><span class="col-att">출석</span></div>` + waiting.map(rowHtml).join('') : ''}
   `);
 }
 function openMemberProfileModal(memberId){
@@ -1087,6 +1234,16 @@ function openMemberProfileModal(memberId){
     else if(cs.state === 'incoming') contactHtml = `<button class="btn btn-accent btn-block" onclick="respondRequest('${cs.reqId}', true); closeModal();">받은 요청 수락하기</button>`;
     else contactHtml = `<button class="btn btn-ghost btn-block" onclick="requestContact('${memberId}'); closeModal();">연락처 요청</button>`;
   }
+  const adminDetail = isAdmin() ? `
+    <div class="card">
+      <p class="section-title" style="margin:0 0 8px;">가입 정보 (관리자 전용 · 진위확인용)</p>
+      <div class="req-row"><span class="req-sub">휴대폰 번호</span><span class="req-name">${maskPhone(m.phone)}</span></div>
+      <div class="req-row"><span class="req-sub">기수</span><span class="req-name">${m.batch || '-'}</span></div>
+      <div class="req-row"><span class="req-sub">설명(소속·거주지 등)</span><span class="req-name">${m.intro || '-'}</span></div>
+      <div class="req-row"><span class="req-sub">가장 기억에 남는 은사님</span><span class="req-name">${m.hint || '-'}</span></div>
+      <div class="req-row"><span class="req-sub">가입일</span><span class="req-name">${m.joinedAt}</span></div>
+    </div>
+  ` : '';
   openModal(m.name, `
     <div class="profile-card" style="margin-bottom:14px;">
       <p class="profile-name">${m.name}${m.batch ? ' · '+m.batch : ''}${m.role==='admin' ? ' 🏅' : ''}</p>
@@ -1096,6 +1253,7 @@ function openMemberProfileModal(memberId){
         <span class="pill">${m.role==='admin' ? '플랫폼관리자' : '동문'}</span>
       </div>
     </div>
+    ${adminDetail}
     ${contactHtml}
   `);
 }
@@ -1385,12 +1543,34 @@ function renderScheduleTab(){
 function renderMembersTab(){
   const admin = isAdmin();
   const list = [...state.members].sort((a,b)=> a.role===b.role ? a.name.localeCompare(b.name) : (a.role==='admin'?-1:1));
+  const thisMonth = ymd(new Date()).slice(0,7);
+  const stats = admin ? {
+    총회원: state.members.length,
+    이번달신규: state.members.filter(m => m.joinedAt.slice(0,7) === thisMonth).length,
+    총모임: state.meetups.length,
+    이번달모임: state.meetups.filter(mt => mt.date.slice(0,7) === thisMonth).length,
+    누적참석: state.meetups.reduce((s,mt)=>s+mt.participants.filter(p=>p.status==='confirmed').length,0),
+    총공지: state.notices.length,
+    총소식: state.posts.length,
+  } : null;
   return `
     <div class="card">
       <h3>동문 ${state.members.length}명</h3>
       <p class="meetup-meta">함께하는 우리 동문들</p>
     </div>
-    ${admin ? `<button class="btn btn-ghost btn-block" onclick="exportAllData()">⬇ 전체 데이터 백업(내보내기)</button>` : ''}
+    ${admin ? `
+    <div class="section-title">운영 현황</div>
+    <div class="card" style="display:grid; grid-template-columns:1fr 1fr 1fr; gap:12px; text-align:center;">
+      <div><div class="disp" style="font-size:20px; font-weight:800;">${stats.총회원}</div><div class="req-sub">전체 동문</div></div>
+      <div><div class="disp" style="font-size:20px; font-weight:800;">${stats.이번달신규}</div><div class="req-sub">이번달 신규</div></div>
+      <div><div class="disp" style="font-size:20px; font-weight:800;">${stats.총모임}</div><div class="req-sub">전체 모임</div></div>
+      <div><div class="disp" style="font-size:20px; font-weight:800;">${stats.이번달모임}</div><div class="req-sub">이번달 모임</div></div>
+      <div><div class="disp" style="font-size:20px; font-weight:800;">${stats.누적참석}</div><div class="req-sub">누적 참석(연인원)</div></div>
+      <div><div class="disp" style="font-size:20px; font-weight:800;">${stats.총공지+stats.총소식}</div><div class="req-sub">공지+소식</div></div>
+    </div>
+    <button class="btn btn-ghost btn-block" onclick="exportYearlyReport()">📊 연간 리포트 엑셀 다운로드</button>
+    <button class="btn btn-ghost btn-block" onclick="exportAllData()">⬇ 전체 데이터 백업(내보내기)</button>
+    ` : ''}
     <div class="card" style="padding:4px 16px;">
       ${list.map(m => `
         <div class="member-row" style="align-items:flex-start;">
