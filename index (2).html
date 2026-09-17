@@ -133,6 +133,9 @@ main#app{padding:16px 16px 4px;}
 }
 .cal-cell.pad{color:#C7C4B6; cursor:default;}
 .cal-cell.today{outline:1.5px solid var(--ink);}
+.cal-cell.holiday{color:#D64545;}
+.cal-cell.saturday{color:#2F6FE0;}
+.cal-cell.selected.holiday, .cal-cell.selected.saturday{color:#fff;}
 .cal-cell.selected{background:var(--ink); color:#fff;}
 .cal-mark{width:5px; height:5px; border-radius:1px; transform:rotate(45deg); background:var(--river); margin-top:3px;}
 .cal-cell.selected .cal-mark{background:var(--accent);}
@@ -200,6 +203,14 @@ main#app{padding:16px 16px 4px;}
 .pill{font-size:11px; background:rgba(255,255,255,.14); padding:5px 10px; border-radius:20px;}
 
 .req-row{display:flex; align-items:center; justify-content:space-between; padding:10px 0; border-bottom:1px solid var(--line);}
+.p-table-head{display:flex; align-items:center; gap:8px; padding:6px 4px; font-size:11px; font-weight:700; color:var(--ink-soft); border-bottom:1px solid var(--line);}
+.p-table-head .col-name{flex:1.3;}
+.p-table-head .col-sub{flex:1.5;}
+.p-table-head .col-att{flex:0.8; text-align:right;}
+.p-table-row{display:flex; align-items:center; gap:8px; padding:9px 4px 2px; font-size:12.5px;}
+.p-table-row .col-name{flex:1.3; font-weight:600; cursor:pointer;}
+.p-table-row .col-sub{flex:1.5; color:var(--ink-soft); overflow:hidden; text-overflow:ellipsis; white-space:nowrap;}
+.p-table-row .col-att{flex:0.8; text-align:right;}
 .req-row:last-child{border-bottom:none;}
 .req-name{font-size:13.5px; font-weight:600;}
 .req-sub{font-size:11.5px; color:var(--ink-soft);}
@@ -260,9 +271,10 @@ main#app{padding:16px 16px 4px;}
   <footer class="app-footer">
     <div class="footer-divider"></div>
     <p class="footer-brand">Youngdong High School Alumni Association</p>
-    <p class="footer-credit">개발자/제작자 : <b>문준래 · JUNLAE MOON</b></p>
+    <p class="footer-credit">개발·제작·관리 : <b>문준래 JUNLAE MOON</b></p>
     <p class="footer-contact">제휴 · 제안 · 사업 · 기술지원 · 홍보 · 후원 문의 : <a href="mailto:junlae.moon@gmail.com">junlae.moon@gmail.com</a></p>
     <p class="footer-copy">© 2026 영동고등학교 총동문회. All rights reserved.</p>
+    <p class="footer-copy" style="margin-top:6px;"><button class="link-btn" style="font-size:10px;" onclick="openPolicyModal()">이용약관 · 개인정보처리방침</button></p>
   </footer>
 </div>
 
@@ -272,6 +284,7 @@ main#app{padding:16px 16px 4px;}
 <!-- Firebase (Firestore) -->
 <script src="https://www.gstatic.com/firebasejs/12.11.0/firebase-app-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/12.11.0/firebase-firestore-compat.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
 <script>
   const firebaseConfig = {
     apiKey: "AIzaSyBqD-6J9-ITG8yX0yrTRTpAVKNY-Rmoubg",
@@ -301,6 +314,12 @@ let state = {
   calMonth: startOfMonth(new Date()),
   selectedDate: ymd(new Date()),
   loaded: false,
+  noticeSearch: '',
+  feedSearch: '',
+  memberSearch: '',
+  activityLog: [],
+  reports: [],
+  lastBackupAt: null,
 };
 let pendingPostImage = null;
 
@@ -313,6 +332,32 @@ function fmtDateKR(dateStr){
   const dt = new Date(y, m-1, d);
   return `${m}월 ${d}일(${DOW[dt.getDay()]})`;
 }
+// 대한민국 공휴일 (공공데이터포털 특일정보 기준). 해가 바뀌면 다음 해 목록을 추가해주세요.
+const KR_HOLIDAYS = {
+  '2026-01-01': '신정',
+  '2026-02-16': '설날 연휴',
+  '2026-02-17': '설날',
+  '2026-02-18': '설날 연휴',
+  '2026-03-01': '삼일절',
+  '2026-03-02': '대체공휴일(삼일절)',
+  '2026-05-01': '노동절',
+  '2026-05-05': '어린이날',
+  '2026-05-24': '부처님오신날',
+  '2026-05-25': '대체공휴일(부처님오신날)',
+  '2026-06-03': '전국동시지방선거',
+  '2026-06-06': '현충일',
+  '2026-07-17': '제헌절',
+  '2026-08-15': '광복절',
+  '2026-08-17': '대체공휴일(광복절)',
+  '2026-09-24': '추석 연휴',
+  '2026-09-25': '추석',
+  '2026-09-26': '추석 연휴',
+  '2026-10-03': '개천절',
+  '2026-10-05': '대체공휴일(개천절)',
+  '2026-10-09': '한글날',
+  '2026-12-25': '기독탄신일',
+};
+function holidayName(dateStr){ return KR_HOLIDAYS[dateStr] || null; }
 function maskPhone(p){
   if(!p) return '-';
   return p.replace(/(\d{2,3})-?(\d{3,4})-?(\d{4})/, '$1-$2-$3');
@@ -322,18 +367,31 @@ function currentMember(){
   return state.members.find(m => m.id === state.session.memberId) || null;
 }
 function isAdmin(){ const m = currentMember(); return !!m && m.role === 'admin'; }
-function canPost(){ const m = currentMember(); return !!m && (m.role === 'admin' || m.canWrite === true); }
-function requireWritePermission(){
+const PERM_LABEL = { meetup: '모임 생성', notice: '공지 작성', feed: '소식 작성', members: '회원 관리', mypage: '동문정보 관리' };
+const PERM_FIELD = { meetup: 'permMeetup', notice: 'permNotice', feed: 'permFeed', members: 'permMembers', mypage: 'permMypage' };
+function hasPerm(type){
+  const m = currentMember();
+  if(!m) return false;
+  if(m.role === 'admin') return true;
+  if(m.canWrite === true && (type === 'meetup' || type === 'notice' || type === 'feed')) return true; // 예전(통합) 권한 부여자는 계속 전체 허용 (하위호환)
+  return !!m[PERM_FIELD[type]];
+}
+function canPost(){ return hasPerm('meetup') || hasPerm('notice') || hasPerm('feed'); }
+function canManageMembers(){ return isAdmin() || hasPerm('members'); }
+function canEditOthersInfo(){ return isAdmin() || hasPerm('mypage'); }
+function requireWritePermission(type){
   if(!requireLogin()) return false;
-  if(!canPost()){ showToast('글쓰기·모임 생성 권한이 없어요. 관리자에게 요청해주세요.'); return false; }
+  if(!hasPerm(type)){ showToast(`${PERM_LABEL[type] || '글쓰기'} 권한이 없어요. 관리자에게 요청해주세요.`); return false; }
   return true;
 }
-function toggleWrite(id){
+function togglePerm(id, type){
   const m = state.members.find(x=>x.id===id);
   if(!m) return;
-  m.canWrite = !m.canWrite;
+  const field = PERM_FIELD[type];
+  m[field] = !m[field];
   saveMembers();
-  showToast(m.canWrite ? `${m.name}님에게 글쓰기 권한을 부여했어요` : `${m.name}님의 글쓰기 권한을 회수했어요`);
+  logActivity('권한 변경', `${m.name} · ${PERM_LABEL[type]} ${m[field]?'부여':'회수'}`);
+  showToast(`${m.name}님의 ${PERM_LABEL[type]} 권한을 ${m[field] ? '부여' : '회수'}했어요`);
   renderAll();
 }
 function memberDisplayName(id, fallback){
@@ -416,6 +474,18 @@ async function init(){
     console.error(e);
     showToast('데이터를 불러오지 못했어요. 새로고침 해주세요.');
   }
+
+  try{
+    const snap = await db.collection('activityLog').orderBy('at','desc').limit(50).get();
+    state.activityLog = snap.docs.map(d => ({id:d.id, ...d.data()}));
+  }catch(e){ state.activityLog = []; }
+
+  try{ state.reports = await loadCollection('reports'); }catch(e){ state.reports = []; }
+
+  try{
+    const metaSnap = await db.collection('meta').doc('backup').get();
+    state.lastBackupAt = metaSnap.exists ? metaSnap.data().lastBackupAt : null;
+  }catch(e){ state.lastBackupAt = null; }
 
   try{
     const raw = localStorage.getItem('rc_session');
@@ -546,10 +616,12 @@ function confirmResetPin(memberId){
   showToast(`${m.name}님의 PIN을 재설정했어요`);
   renderAll();
 }
-function openEditProfileModal(){
-  const me = currentMember();
+function openEditProfileModal(targetId){
+  const isSelf = !targetId;
+  const me = isSelf ? currentMember() : state.members.find(x=>x.id===targetId);
   if(!me) return;
-  openModal('내 정보 수정', `
+  openModal(isSelf ? '내 정보 수정' : `${me.name} 님 정보 수정`, `
+    <input type="hidden" id="editTargetId" value="${me.id}">
     <div class="field"><label>이름 (본명만, 직책·소속은 아래 설명란에)</label><input id="editName" value="${me.name}"></div>
     <div class="field"><label>설명 (소속 · 하는 일 · 거주지 등)</label><input id="editIntro" value="${me.intro||''}"></div>
     <div class="field"><label>기수</label><input id="editBatch" value="${me.batch||''}"></div>
@@ -560,8 +632,10 @@ function openEditProfileModal(){
   `);
 }
 function saveProfileEdit(){
-  const me = currentMember();
+  const targetId = document.getElementById('editTargetId').value;
+  const me = state.members.find(x=>x.id===targetId);
   if(!me) return;
+  const isSelf = currentMember() && currentMember().id === targetId;
   const name = document.getElementById('editName').value.trim();
   const intro = document.getElementById('editIntro').value.trim();
   const batch = document.getElementById('editBatch').value.trim();
@@ -574,8 +648,9 @@ function saveProfileEdit(){
   me.name = name; me.intro = intro; me.batch = batch; me.phone = phone; me.hint = hint;
   if(pin) me.pin = pin;
   saveMembers();
+  if(!isSelf) logActivity('동문 정보 수정(위임)', me.name);
   closeModal();
-  showToast('내 정보를 수정했어요');
+  showToast('정보를 수정했어요');
   renderAll();
 }
 function exportAllData(){
@@ -597,6 +672,138 @@ function exportAllData(){
   a.remove();
   URL.revokeObjectURL(url);
   showToast('백업 파일을 다운로드했어요');
+  const now = Date.now();
+  state.lastBackupAt = now;
+  db.collection('meta').doc('backup').set({ lastBackupAt: now }, { merge: true }).catch(()=>{});
+}
+
+/* ---------------------------------------------------------
+   관리자 활동 로그
+--------------------------------------------------------- */
+async function logActivity(action, detail){
+  const me = currentMember();
+  const entry = { action, detail: detail || '', actorName: me ? me.name : '시스템', at: Date.now() };
+  try{
+    const ref = await db.collection('activityLog').add(entry);
+    state.activityLog.unshift({ id: ref.id, ...entry });
+    if(state.activityLog.length > 50) state.activityLog.length = 50;
+  }catch(e){ console.error(e); }
+}
+function openActivityLogModal(){
+  const rows = state.activityLog || [];
+  openModal('관리자 활동 로그', `
+    <p class="helper">최근 활동 ${rows.length}건 (최대 50건 표시)</p>
+    ${rows.length === 0 ? '<div class="empty">아직 기록된 활동이 없어요</div>' : rows.map(r => `
+      <div class="req-row">
+        <span><span class="req-name">${r.action}</span>${r.detail ? ` <span class="req-sub">· ${r.detail}</span>` : ''}<br><span class="req-sub">${r.actorName} · ${new Date(r.at).toLocaleString('ko-KR')}</span></span>
+      </div>
+    `).join('')}
+  `);
+}
+
+/* ---------------------------------------------------------
+   신고 기능
+--------------------------------------------------------- */
+function reportPost(postId){
+  if(!requireLogin()) return;
+  const me = currentMember();
+  const p = state.posts.find(x => x.id === postId);
+  if(!p) return;
+  const reason = prompt('신고 사유를 간단히 적어주세요 (예: 부적절한 내용, 광고 등)');
+  if(reason === null) return;
+  const report = { id: uid(), targetType: 'post', targetId: postId, targetTitle: p.title || '', reporterId: me.id, reporterName: me.name, reason: reason.trim() || '(사유 미입력)', resolved: false, createdAt: Date.now() };
+  state.reports.push(report);
+  db.collection('reports').doc(report.id).set(report).catch(()=>{});
+  showToast('신고가 접수됐어요, 감사합니다');
+}
+function resolveReport(reportId){
+  const r = state.reports.find(x => x.id === reportId);
+  if(!r) return;
+  r.resolved = true;
+  db.collection('reports').doc(reportId).update({ resolved: true }).catch(()=>{});
+  showToast('신고를 처리 완료로 표시했어요');
+  openReportsModal();
+}
+function openReportsModal(){
+  const rows = [...(state.reports||[])].sort((a,b)=> (a.resolved===b.resolved?0:(a.resolved?1:-1)) || b.createdAt-a.createdAt);
+  openModal('신고 내역', `
+    ${rows.length === 0 ? '<div class="empty">신고 내역이 없어요</div>' : rows.map(r => `
+      <div class="card" style="${r.resolved?'opacity:.55;':''}">
+        <p class="meetup-title" style="margin:0 0 4px;">${r.targetTitle || '(대상 삭제됨)'}</p>
+        <p class="meetup-meta" style="margin:0 0 6px;">신고자: ${r.reporterName} · ${new Date(r.createdAt).toLocaleString('ko-KR')}</p>
+        <p style="font-size:12.5px; margin:0 0 8px;">사유: ${r.reason}</p>
+        ${r.resolved ? `<span class="badge badge-past">처리완료</span>` : `<button class="btn btn-ghost btn-sm" onclick="resolveReport('${r.id}')">처리 완료로 표시</button>`}
+      </div>
+    `).join('')}
+  `);
+}
+
+function exportMeetupParticipants(meetupId){
+  const mt = state.meetups.find(m => m.id === meetupId);
+  if(!mt) return;
+  const confirmed = mt.participants.filter(p => p.status === 'confirmed');
+  if(!confirmed.length){ showToast('아직 참가자가 없어요'); return; }
+  const rows = confirmed.map((p, i) => {
+    const m = state.members.find(x => x.id === p.memberId);
+    return {
+      '모임이름': mt.title,
+      '일시': `${mt.date} ${mt.time}`,
+      '장소': mt.location,
+      'No.': i + 1,
+      '기수': m ? (m.batch || '') : '',
+      '이름': m ? m.name : '(탈퇴회원)',
+      '연락처': m ? maskPhone(m.phone) : '',
+      '소그룹': p.subgroup || '',
+      '상세정보(직장·직종 등)': m ? (m.intro || '') : '',
+      '출석여부': p.attended ? '출석' : '미출석',
+    };
+  });
+  const ws = XLSX.utils.json_to_sheet(rows);
+  ws['!cols'] = [{wch:20},{wch:16},{wch:16},{wch:5},{wch:8},{wch:10},{wch:14},{wch:16},{wch:26},{wch:8}];
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws, '참가자명단');
+  XLSX.writeFile(wb, `${mt.title}_참가자명단.xlsx`);
+  showToast('엑셀 파일을 다운로드했어요');
+}
+
+function exportYearlyReport(){
+  const wb = XLSX.utils.book_new();
+
+  const totalAttendance = state.meetups.reduce((sum, mt) => sum + mt.participants.filter(p => p.status === 'confirmed').length, 0);
+  const checkedIn = state.meetups.reduce((sum, mt) => sum + mt.participants.filter(p => p.attended).length, 0);
+  const summary = [
+    { 항목: '총 동문(회원) 수', 값: state.members.length },
+    { 항목: '총 모임 수', 값: state.meetups.length },
+    { 항목: '누적 참석 신청(연인원)', 값: totalAttendance },
+    { 항목: '누적 실제 출석(연인원)', 값: checkedIn },
+    { 항목: '총 공지 수', 값: state.notices.length },
+    { 항목: '총 소식 수', 값: state.posts.length },
+    { 항목: '추출일', 값: ymd(new Date()) },
+  ];
+  XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(summary), '요약');
+
+  const meetupRows = [...state.meetups].sort((a,b)=>(a.date+a.time).localeCompare(b.date+b.time)).map(mt => ({
+    '모임이름': mt.title,
+    '일시': `${mt.date} ${mt.time}`,
+    '장소': mt.location,
+    '확정인원': mt.participants.filter(p=>p.status==='confirmed').length,
+    '대기인원': mt.participants.filter(p=>p.status==='waiting').length,
+    '실제출석': mt.participants.filter(p=>p.attended).length,
+  }));
+  XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(meetupRows), '모임목록');
+
+  const memberRows = state.members.map(m => ({
+    '이름': m.name,
+    '기수': m.batch || '',
+    '연락처': maskPhone(m.phone),
+    '설명': m.intro || '',
+    '가입일': m.joinedAt,
+    '권한': m.role === 'admin' ? '플랫폼관리자' : '동문',
+  }));
+  XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(memberRows), '회원목록');
+
+  XLSX.writeFile(wb, `총동문회_연간리포트_${ymd(new Date())}.xlsx`);
+  showToast('연간 리포트를 다운로드했어요');
 }
 
 /* ---------------------------------------------------------
@@ -643,6 +850,7 @@ function saveEditedNotice(id){
 function addMeetup(data){
   const me = currentMember();
   if(!data.title.trim() || !data.date || !data.time || !data.location.trim()){ showToast('모임 이름 · 일시 · 장소는 꼭 입력해주세요'); return; }
+  const needsApproval = me.role !== 'admin';
   state.meetups.push({
     id: uid(),
     title: data.title.trim(),
@@ -656,18 +864,56 @@ function addMeetup(data){
     capacity: Number(data.capacity) || 0,
     hostId: me.id,
     participants: [],
+    attendanceCode: String(Math.floor(1000 + Math.random()*9000)),
+    status: needsApproval ? 'pending' : 'approved',
     createdAt: Date.now(),
   });
   pendingPostImage = null;
   saveMeetups();
   closeModal();
-  showToast('모임을 등록했어요');
+  showToast(needsApproval ? '모임 등록 요청을 보냈어요. 관리자 승인 후 게시돼요.' : '모임을 등록했어요');
   renderAll();
 }
 function deleteMeetup(id){
   state.meetups = state.meetups.filter(mt => mt.id !== id);
   saveMeetups();
   renderAll();
+}
+function approveMeetup(id){
+  const mt = state.meetups.find(m => m.id === id);
+  if(!mt) return;
+  mt.status = 'approved';
+  saveMeetups();
+  logActivity('모임 승인', mt.title);
+  showToast('모임을 승인했어요');
+  closeModal();
+  renderAll();
+}
+function rejectMeetup(id){
+  const mt = state.meetups.find(m => m.id === id);
+  if(!mt) return;
+  if(!confirm(`"${mt.title}" 모임을 반려(삭제)할까요? 작성자에게는 별도 알림이 가지 않아요.`)) return;
+  state.meetups = state.meetups.filter(m => m.id !== id);
+  saveMeetups();
+  logActivity('모임 반려', mt.title);
+  showToast('모임을 반려했어요');
+  closeModal();
+  renderAll();
+}
+function openPendingMeetupsModal(){
+  const pending = state.meetups.filter(mt => mt.status === 'pending');
+  openModal('승인 대기 모임', `
+    ${pending.length === 0 ? '<div class="empty">대기 중인 모임이 없어요</div>' : pending.map(mt => `
+      <div class="card">
+        <p class="meetup-title" style="margin:0 0 4px;">${mt.title}</p>
+        <p class="meetup-meta" style="margin:0 0 10px;">${fmtDateKR(mt.date)} · ${mt.time} · ${mt.location}<br>작성자: ${memberDisplayName(mt.hostId)}</p>
+        <div style="display:flex; gap:8px;">
+          <button class="btn btn-accent btn-sm" onclick="approveMeetup('${mt.id}')">승인</button>
+          <button class="btn btn-coral btn-sm" onclick="rejectMeetup('${mt.id}')">반려</button>
+        </div>
+      </div>
+    `).join('')}
+  `);
 }
 function openEditMeetupModal(id){
   const mt = state.meetups.find(m => m.id === id);
@@ -749,7 +995,7 @@ function joinMeetup(id, subgroup){
   if(!mt) return;
   if(mt.participants.some(p => p.memberId === me.id)){ showToast('이미 신청했어요'); return; }
   const full = mt.capacity > 0 && confirmedCount(mt) >= mt.capacity;
-  mt.participants.push({ memberId: me.id, status: full ? 'waiting' : 'confirmed', appliedAt: Date.now(), wasWaiting: full, notifiedPromotion: true, subgroup: subgroup || null });
+  mt.participants.push({ memberId: me.id, status: full ? 'waiting' : 'confirmed', appliedAt: Date.now(), wasWaiting: full, notifiedPromotion: true, subgroup: subgroup || null, attended: false });
   saveMeetups();
   closeModal();
   showToast(full ? '정원이 가득 차 대기로 신청됐어요' : '신청 완료! 그날 뵈어요');
@@ -784,6 +1030,53 @@ function checkMyPromotions(){
     }
   });
   if(changed) saveMeetups();
+}
+
+/* ---------------------------------------------------------
+   출석 체크
+--------------------------------------------------------- */
+function attendanceWindowOpen(mt){
+  const [y,m,d] = mt.date.split('-').map(Number);
+  const [hh,mm] = mt.time.split(':').map(Number);
+  const start = new Date(y, m-1, d, hh, mm).getTime();
+  const now = Date.now();
+  return now >= start - 60*60*1000; // 모임 시작 1시간 전부터 오픈
+}
+function checkInWithCode(meetupId, code){
+  const me = currentMember();
+  if(!me) return;
+  const mt = state.meetups.find(m => m.id === meetupId);
+  if(!mt) return;
+  const p = mt.participants.find(x => x.memberId === me.id);
+  if(!p){ showToast('신청 내역이 없어요'); return; }
+  if(!attendanceWindowOpen(mt)){ showToast('출석체크는 모임 1시간 전부터 가능해요'); return; }
+  if(code.trim() !== mt.attendanceCode){ showToast('출석 코드가 일치하지 않아요'); return; }
+  p.attended = true;
+  p.attendedAt = Date.now();
+  saveMeetups();
+  showToast('출석 확인됐어요, 반가워요! 🙌');
+  renderApp();
+}
+function toggleAttendance(meetupId, memberId){
+  const mt = state.meetups.find(m => m.id === meetupId);
+  if(!mt) return;
+  const p = mt.participants.find(x => x.memberId === memberId);
+  if(!p) return;
+  p.attended = !p.attended;
+  if(p.attended) p.attendedAt = Date.now();
+  saveMeetups();
+  showToast(p.attended ? '출석 처리했어요' : '출석을 취소했어요');
+  const modalRoot = document.getElementById('modal-root');
+  if(modalRoot.innerHTML) openParticipantsModal(meetupId);
+}
+function changeParticipantSubgroup(meetupId, memberId, newSubgroup){
+  const mt = state.meetups.find(m => m.id === meetupId);
+  if(!mt) return;
+  const p = mt.participants.find(x => x.memberId === memberId);
+  if(!p) return;
+  p.subgroup = newSubgroup;
+  saveMeetups();
+  showToast('소그룹을 변경했어요');
 }
 
 /* ---------------------------------------------------------
@@ -953,6 +1246,23 @@ function openModal(title, bodyHtml){
       </div>
     </div>`;
 }
+function openPolicyModal(){
+  openModal('이용약관 · 개인정보처리방침', `
+    <div style="font-size:12.5px; line-height:1.7; color:var(--ink-soft);">
+      <p><b style="color:var(--ink);">1. 수집하는 개인정보</b><br>
+      이름, 휴대폰번호, 기수, 소개(소속·거주지 등), 본인확인용 힌트 답변. 회원가입 시 본인이 직접 입력합니다.</p>
+      <p><b style="color:var(--ink);">2. 이용 목적</b><br>
+      동문 본인 확인, 모임 신청·출석 관리, 동문 간 연락처 공유(상호 동의 시), PIN 분실 시 본인확인.</p>
+      <p><b style="color:var(--ink);">3. 연락처 공개 범위</b><br>
+      휴대폰번호는 본인이 요청을 수락한 동문에게만 공개됩니다. 플랫폼관리자 및 위임받은 운영진은 운영 목적상 열람 권한을 가집니다.</p>
+      <p><b style="color:var(--ink);">4. 보관 및 파기</b><br>
+      회원 탈퇴(제외) 시 관련 정보는 삭제됩니다. 별도 요청 시 운영진에게 정보 삭제를 요청할 수 있습니다.</p>
+      <p><b style="color:var(--ink);">5. 문의</b><br>
+      개인정보 관련 문의는 하단 이메일(junlae.moon@gmail.com)로 연락 주세요.</p>
+      <p style="margin-top:14px; color:#B0B6C2;">본 방침은 비영리 동문회 운영 목적의 자체 제작 서비스에 적용되며, 2026년 기준으로 작성되었습니다.</p>
+    </div>
+  `);
+}
 function openAuthModal(){
   openModal('로그인 / 가입', `
     <div class="auth-toggle">
@@ -997,7 +1307,7 @@ function switchAuthTab(which){
   }
 }
 function openNoticeModal(){
-  if(!requireWritePermission()) return;
+  if(!requireWritePermission('notice')) return;
   openModal('공지 작성', `
     <div class="field"><label>제목</label><input id="noticeTitle" placeholder="예: 2026년 정기총회 안내"></div>
     <div class="field"><label>내용</label><textarea id="noticeContent" placeholder="공지 내용을 적어주세요"></textarea></div>
@@ -1005,7 +1315,7 @@ function openNoticeModal(){
   `);
 }
 function openMeetupModal(){
-  if(!requireWritePermission()) return;
+  if(!requireWritePermission('meetup')) return;
   const d = state.selectedDate || ymd(new Date());
   pendingPostImage = null;
   openModal('모임 등록', `
@@ -1027,19 +1337,61 @@ function openMeetupModal(){
 function openParticipantsModal(id){
   const mt = state.meetups.find(m => m.id === id);
   if(!mt) return;
+  if(!mt.attendanceCode){ mt.attendanceCode = String(Math.floor(1000 + Math.random()*9000)); saveMeetups(); }
   const confirmed = mt.participants.filter(p=>p.status==='confirmed');
   const waiting = mt.participants.filter(p=>p.status==='waiting');
-  const nameOf = mid => memberDisplayName(mid);
-  const rowHtml = p => `
-    <div class="req-row" style="cursor:pointer;" onclick="openMemberProfileModal('${p.memberId}')">
-      <span class="req-name">${nameOf(p.memberId)}${p.subgroup ? ` <span class="req-sub">· ${p.subgroup}</span>` : ''}</span>
-      <span class="link-btn">정보 보기 ›</span>
-    </div>`;
+  const admin = isAdmin();
+  const me = currentMember();
+  const winOpen = attendanceWindowOpen(mt);
+
+  const groups = getSubgroups(mt);
+  const rowHtml = p => {
+    const attBadge = p.attended ? `<span class="badge badge-open">출석</span>` : `<span class="badge badge-past">미출석</span>`;
+    const nameLabel = memberDisplayName(p.memberId);
+    const subCell = (admin && groups.length)
+      ? `<select class="col-sub" style="border:1px solid var(--line); border-radius:8px; font-size:12px; padding:3px 4px; background:#FCFCFA;" onchange="changeParticipantSubgroup('${mt.id}','${p.memberId}', this.value)">
+          ${groups.map(g => `<option value="${g.replace(/"/g,'&quot;')}" ${p.subgroup===g?'selected':''}>${g}</option>`).join('')}
+        </select>`
+      : `<span class="col-sub">${p.subgroup || '-'}</span>`;
+    return `
+      <div class="p-table-row">
+        <span class="post-avatar" style="width:26px; height:26px; font-size:11px; flex-shrink:0;">${nameLabel.slice(0,1)}</span>
+        <span class="col-name" onclick="openMemberProfileModal('${p.memberId}')">${nameLabel}</span>
+        ${subCell}
+        <span class="col-att">${attBadge}</span>
+      </div>
+      ${admin ? `<div style="text-align:right; margin:2px 0 8px;"><button class="btn btn-ghost btn-sm" onclick="toggleAttendance('${mt.id}','${p.memberId}')">${p.attended?'출석 취소':'출석 처리'}</button></div>` : ''}
+    `;
+  };
+
+  const myEntry = me ? mt.participants.find(p=>p.memberId===me.id) : null;
+  let checkinHtml = '';
+  if(winOpen && myEntry && myEntry.status==='confirmed'){
+    checkinHtml = myEntry.attended
+      ? `<div class="card" style="background:#E8EDF6;"><p class="helper" style="margin:0;">✅ 출석 처리됐어요</p></div>`
+      : `<div class="card">
+          <p class="helper" style="margin:0 0 8px;">출석 코드를 입력해주세요 (모임 장소에서 확인)</p>
+          <div class="field"><input id="attCodeInput" inputmode="numeric" maxlength="4" placeholder="0000"></div>
+          <button class="btn btn-accent btn-block" onclick="checkInWithCode('${mt.id}', document.getElementById('attCodeInput').value)">출석 체크</button>
+        </div>`;
+  }
+
+  const adminCodeHtml = (admin && winOpen) ? `
+    <div class="card" style="text-align:center; background:var(--ink); color:#fff;">
+      <p class="helper" style="color:rgba(255,255,255,.7); margin:0 0 4px;">출석 코드 (참가자에게 보여주세요)</p>
+      <p class="disp" style="font-size:28px; font-weight:800; letter-spacing:.1em; margin:0;">${mt.attendanceCode}</p>
+    </div>` : '';
+
+  const exportBtn = admin ? `<button class="btn btn-ghost btn-block" onclick="exportMeetupParticipants('${mt.id}')">⬇ 참가자 명단 엑셀로 내보내기</button>` : '';
+
   openModal(mt.title, `
     <p class="helper">${fmtDateKR(mt.date)} ${mt.time} · ${mt.location}</p>
+    ${adminCodeHtml}
+    ${checkinHtml}
+    ${exportBtn}
     <div class="section-title">확정 (${confirmed.length}${mt.capacity>0 ? '/'+mt.capacity : ''})</div>
-    ${confirmed.length ? confirmed.map(rowHtml).join('') : '<p class="helper">아직 신청자가 없어요</p>'}
-    ${waiting.length ? `<div class="section-title">대기 (${waiting.length})</div>` + waiting.map(rowHtml).join('') : ''}
+    ${confirmed.length ? `<div class="p-table-head"><span class="col-name">이름</span><span class="col-sub">소그룹</span><span class="col-att">출석</span></div>` + confirmed.map(rowHtml).join('') : '<p class="helper">아직 신청자가 없어요</p>'}
+    ${waiting.length ? `<div class="section-title">대기 (${waiting.length})</div><div class="p-table-head"><span class="col-name">이름</span><span class="col-sub">소그룹</span><span class="col-att">출석</span></div>` + waiting.map(rowHtml).join('') : ''}
   `);
 }
 function openMemberProfileModal(memberId){
@@ -1058,20 +1410,33 @@ function openMemberProfileModal(memberId){
     else if(cs.state === 'incoming') contactHtml = `<button class="btn btn-accent btn-block" onclick="respondRequest('${cs.reqId}', true); closeModal();">받은 요청 수락하기</button>`;
     else contactHtml = `<button class="btn btn-ghost btn-block" onclick="requestContact('${memberId}'); closeModal();">연락처 요청</button>`;
   }
+  const adminDetail = (isAdmin() || canManageMembers()) ? `
+    <div class="card">
+      <p class="section-title" style="margin:0 0 8px;">가입 정보 (관리자 전용 · 진위확인용)</p>
+      <div class="req-row"><span class="req-sub">휴대폰 번호</span><span class="req-name">${maskPhone(m.phone)}</span></div>
+      <div class="req-row"><span class="req-sub">기수</span><span class="req-name">${m.batch || '-'}</span></div>
+      <div class="req-row"><span class="req-sub">설명(소속·거주지 등)</span><span class="req-name">${m.intro || '-'}</span></div>
+      <div class="req-row"><span class="req-sub">가장 기억에 남는 은사님</span><span class="req-name">${m.hint || '-'}</span></div>
+      <div class="req-row"><span class="req-sub">가입일</span><span class="req-name">${m.joinedAt}</span></div>
+    </div>
+  ` : '';
+  const editOthersBtn = (canEditOthersInfo() && me && me.id !== memberId) ? `<button class="btn btn-ghost btn-block" onclick="openEditProfileModal('${memberId}')">이 동문 정보 수정</button>` : '';
   openModal(m.name, `
     <div class="profile-card" style="margin-bottom:14px;">
-      <p class="profile-name">${m.name}${m.batch ? ' · '+m.batch : ''}${m.role==='admin' ? ' 🏅' : ''}</p>
+      <p class="profile-name">${m.name}${m.batch ? ' · '+m.batch : ''}${m.title ? ' · '+m.title : ''}${m.role==='admin' ? ' 🏅' : ''}</p>
       ${m.intro ? `<p class="profile-phone" style="margin-top:2px;">${m.intro}</p>` : ''}
       <div class="tag-row">
         <span class="pill">가입일 ${m.joinedAt}</span>
         <span class="pill">${m.role==='admin' ? '플랫폼관리자' : '동문'}</span>
       </div>
     </div>
+    ${adminDetail}
+    ${editOthersBtn}
     ${contactHtml}
   `);
 }
 function openPostModal(){
-  if(!requireWritePermission()) return;
+  if(!requireWritePermission('feed')) return;
   pendingPostImage = null;
   openModal('소식 남기기', `
     <div class="field"><label>제목</label><input id="postTitle" placeholder="예: 8월 동문 모임 후기"></div>
@@ -1150,12 +1515,23 @@ function openNoticeDetailModal(id){
   if(!n) return;
   openModal('공지', noticeCardFull(n));
 }
+function renderNoticeList(){
+  const q = (state.noticeSearch||'').trim().toLowerCase();
+  const list = q ? state.notices.filter(n => n.title.toLowerCase().includes(q) || n.content.toLowerCase().includes(q)) : state.notices;
+  if(list.length === 0) return q ? `<div class="empty">검색 결과가 없어요</div>` : `<div class="empty">아직 공지가 없어요</div>`;
+  return list.map(noticeCardCompact).join('');
+}
+function onNoticeSearch(v){
+  state.noticeSearch = v;
+  const el = document.getElementById('noticeListArea');
+  if(el) el.innerHTML = renderNoticeList();
+}
 function renderNoticeTab(){
-  const list = state.notices;
   return `
-    ${canPost() ? `<button class="btn btn-primary btn-block" onclick="openNoticeModal()">+ 공지 작성</button>` : ''}
+    ${hasPerm('notice') ? `<button class="btn btn-primary btn-block" onclick="openNoticeModal()">+ 공지 작성</button>` : ''}
+    <div class="field" style="margin-top:12px;"><input id="noticeSearchInput" placeholder="🔍 공지 제목·내용 검색" value="${state.noticeSearch||''}" oninput="onNoticeSearch(this.value)"></div>
     <div class="section-title">공지사항</div>
-    ${list.length === 0 ? `<div class="empty">아직 공지가 없어요</div>` : list.map(noticeCardCompact).join('')}
+    <div id="noticeListArea">${renderNoticeList()}</div>
   `;
 }
 
@@ -1175,6 +1551,7 @@ function postCardFull(p){
         <span style="font-size:12.5px; color:var(--ink-soft);">💬 ${p.comments.length}</span>
         <span style="margin-left:auto; display:flex; gap:6px;">
           ${canEdit ? `<button class="btn btn-ghost btn-sm" onclick="openEditPostModal('${p.id}')">수정</button>` : ''}
+          ${!canEdit && me ? `<button class="btn btn-ghost btn-sm" onclick="reportPost('${p.id}')">🚩 신고</button>` : ''}
           ${canDelete ? `<button class="btn btn-ghost btn-sm" onclick="deletePost('${p.id}')">삭제</button>` : ''}
         </span>
       </div>
@@ -1206,12 +1583,24 @@ function openPostDetailModal(id){
   if(!p) return;
   openModal('소식', postCardFull(p));
 }
+function renderFeedList(){
+  const q = (state.feedSearch||'').trim().toLowerCase();
+  let list = [...state.posts].sort((a,b) => b.createdAt - a.createdAt);
+  if(q) list = list.filter(p => (p.title||'').toLowerCase().includes(q) || (p.content||'').toLowerCase().includes(q));
+  if(list.length === 0) return q ? `<div class="empty">검색 결과가 없어요</div>` : `<div class="empty">아직 올라온 소식이 없어요, 첫 소식을 남겨보세요</div>`;
+  return list.map(postCardCompact).join('');
+}
+function onFeedSearch(v){
+  state.feedSearch = v;
+  const el = document.getElementById('feedListArea');
+  if(el) el.innerHTML = renderFeedList();
+}
 function renderFeedTab(){
-  const list = [...state.posts].sort((a,b) => b.createdAt - a.createdAt);
   return `
-    ${canPost() ? `<button class="btn btn-primary btn-block" onclick="openPostModal()">+ 소식 남기기</button>` : ''}
+    ${hasPerm('feed') ? `<button class="btn btn-primary btn-block" onclick="openPostModal()">+ 소식 남기기</button>` : ''}
+    <div class="field" style="margin-top:12px;"><input id="feedSearchInput" placeholder="🔍 소식 제목·내용 검색" value="${state.feedSearch||''}" oninput="onFeedSearch(this.value)"></div>
     <div class="section-title">동문 소식</div>
-    ${list.length === 0 ? `<div class="empty">아직 올라온 소식이 없어요, 첫 소식을 남겨보세요</div>` : list.map(postCardCompact).join('')}
+    <div id="feedListArea">${renderFeedList()}</div>
   `;
 }
 
@@ -1228,7 +1617,7 @@ function renderCalendar(){
   while(cells.length % 7 !== 0) cells.push({d: cells.length, pad:true});
 
   const todayStr = ymd(new Date());
-  const eventDates = new Set(state.meetups.map(mt => mt.date));
+  const eventDates = new Set(visibleMeetups().map(mt => mt.date));
 
   return `
     <div class="card">
@@ -1239,12 +1628,15 @@ function renderCalendar(){
       </div>
       <div class="cal-grid">
         ${DOW.map(d=>`<div class="cal-dow">${d}</div>`).join('')}
-        ${cells.map(c => {
+        ${cells.map((c, idx) => {
           if(c.pad) return `<div class="cal-cell pad">${c.d}</div>`;
           const isToday = c.dateStr === todayStr;
           const isSel = c.dateStr === state.selectedDate;
           const hasEvent = eventDates.has(c.dateStr);
-          return `<div class="cal-cell ${isToday?'today':''} ${isSel?'selected':''}" onclick="selectDate('${c.dateStr}')">
+          const hName = holidayName(c.dateStr);
+          const col = idx % 7; // 0=일요일 ... 6=토요일
+          const dowClass = hName || col === 0 ? 'holiday' : (col === 6 ? 'saturday' : '');
+          return `<div class="cal-cell ${dowClass} ${isToday?'today':''} ${isSel?'selected':''}" onclick="selectDate('${c.dateStr}')" ${hName ? `title="${hName}"` : ''}>
             <span>${c.d}</span>${hasEvent ? '<span class="cal-mark"></span>' : ''}
           </div>`;
         }).join('')}
@@ -1272,13 +1664,21 @@ function meetupCard(mt){
   const isHost = currentMember() && mt.hostId === currentMember().id;
   const full = mt.capacity > 0 && confirmed >= mt.capacity;
   const groups = getSubgroups(mt);
+  const isPending = mt.status === 'pending';
   let badge;
-  if(isPast) badge = `<span class="badge badge-past">종료</span>`;
+  if(isPending) badge = `<span class="badge badge-full">심사중</span>`;
+  else if(isPast) badge = `<span class="badge badge-past">종료</span>`;
   else if(full) badge = `<span class="badge badge-full">마감</span>`;
   else badge = `<span class="badge badge-open">모집중</span>`;
 
   let actions = '';
-  if(!isPast){
+  if(isPending){
+    if(isAdmin()){
+      actions = `<button class="btn btn-accent btn-sm" onclick="approveMeetup('${mt.id}')">승인</button><button class="btn btn-coral btn-sm" onclick="rejectMeetup('${mt.id}')">반려</button>`;
+    } else if(isHost){
+      actions = `<span class="helper" style="margin:0;">관리자 승인을 기다리고 있어요</span>`;
+    }
+  } else if(!isPast){
     if(myStatus === 'confirmed') actions = `<button class="btn btn-coral btn-sm" onclick="cancelMeetup('${mt.id}')">신청 취소</button>`;
     else if(myStatus === 'waiting') actions = `<button class="btn btn-ghost btn-sm" disabled>대기중</button><button class="btn btn-coral btn-sm" onclick="cancelMeetup('${mt.id}')">취소</button>`;
     else if(groups.length) actions = `<button class="btn btn-accent btn-sm" onclick="openJoinModal('${mt.id}')">${full ? '대기 신청' : '참여 신청'}</button>`;
@@ -1318,7 +1718,7 @@ function meetupCardCompact(mt){
     <div class="meetup" style="cursor:pointer; display:flex; gap:12px; align-items:center;" onclick="openMeetupDetailModal('${mt.id}')">
       ${mt.image ? `<img src="${mt.image}" style="width:56px;height:56px;border-radius:10px;object-fit:cover;flex-shrink:0;">` : `<div style="width:56px;height:56px;border-radius:10px;background:#EDEFF3;flex-shrink:0;display:flex;align-items:center;justify-content:center;font-size:20px;">${isPast ? '🏁' : '📅'}</div>`}
       <div style="min-width:0; flex:1;">
-        <p class="meetup-title" style="margin:0 0 3px; font-size:13.5px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">${mt.title}</p>
+        <p class="meetup-title" style="margin:0 0 3px; font-size:13.5px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">${mt.title}${mt.status==='pending' ? ' <span class="badge badge-full" style="font-size:9px;">심사중</span>' : ''}</p>
         <p class="meetup-meta" style="margin:0;">${fmtDateKR(mt.date)} · ${mt.time}</p>
       </div>
     </div>
@@ -1329,17 +1729,22 @@ function openMeetupDetailModal(id){
   if(!mt) return;
   openModal('모임 상세', meetupCard(mt));
 }
+function visibleMeetups(){
+  const me = currentMember();
+  return state.meetups.filter(mt => mt.status !== 'pending' || isAdmin() || (me && mt.hostId === me.id));
+}
 function renderScheduleTab(){
   const selected = state.selectedDate;
-  const selMeetups = state.meetups.filter(mt => mt.date === selected).sort((a,b)=>a.time.localeCompare(b.time));
-  const upcoming = state.meetups.filter(mt => mt.date >= ymd(new Date())).sort((a,b)=> (a.date+a.time).localeCompare(b.date+b.time));
-  const past = state.meetups.filter(mt => mt.date < ymd(new Date())).sort((a,b)=> (b.date+b.time).localeCompare(a.date+a.time));
+  const all = visibleMeetups();
+  const selMeetups = all.filter(mt => mt.date === selected).sort((a,b)=>a.time.localeCompare(b.time));
+  const upcoming = all.filter(mt => mt.date >= ymd(new Date())).sort((a,b)=> (a.date+a.time).localeCompare(b.date+b.time));
+  const past = all.filter(mt => mt.date < ymd(new Date())).sort((a,b)=> (b.date+b.time).localeCompare(a.date+a.time));
 
   return `
     ${renderCalendar()}
-    ${canPost() ? `<button class="btn btn-primary btn-block fab" onclick="openMeetupModal()">+ 모임 만들기</button>` : ''}
+    ${hasPerm('meetup') ? `<button class="btn btn-primary btn-block fab" onclick="openMeetupModal()">+ 모임 만들기</button>` : ''}
 
-    <div class="section-title">${fmtDateKR(selected)}</div>
+    <div class="section-title">${fmtDateKR(selected)}${holidayName(selected) ? ' · 🎌 '+holidayName(selected) : ''}</div>
     ${selMeetups.length ? selMeetups.map(meetupCardCompact).join('') : `<div class="empty">이 날은 예정된 모임이 없어요</div>`}
 
     <div class="section-title">다가오는 모임</div>
@@ -1350,32 +1755,109 @@ function renderScheduleTab(){
   `;
 }
 
-function renderMembersTab(){
+function openTitleModal(memberId){
+  const m = state.members.find(x=>x.id===memberId);
+  if(!m) return;
+  openModal('직함 설정', `
+    <p class="helper">동문회 내 직함을 입력해주세요 (예: 총동문회장, 사무총장, OO기 총무). 비워두면 표시되지 않아요.</p>
+    <div class="field"><input id="titleInput" value="${(m.title||'').replace(/"/g,'&quot;')}" placeholder="예: 총동문회장"></div>
+    <button class="btn btn-accent btn-block" onclick="saveTitleFor('${memberId}')">저장</button>
+  `);
+}
+function saveTitleFor(memberId){
+  const m = state.members.find(x=>x.id===memberId);
+  if(!m) return;
+  m.title = document.getElementById('titleInput').value.trim();
+  saveMembers();
+  logActivity('직함 설정', `${m.name} · ${m.title || '(해제)'}`);
+  closeModal();
+  showToast('직함을 저장했어요');
+  renderAll();
+}
+function renderMemberList(){
   const admin = isAdmin();
-  const list = [...state.members].sort((a,b)=> a.role===b.role ? a.name.localeCompare(b.name) : (a.role==='admin'?-1:1));
-  return `
-    <div class="card">
-      <h3>동문 ${state.members.length}명</h3>
-      <p class="meetup-meta">함께하는 우리 동문들</p>
-    </div>
-    ${admin ? `<button class="btn btn-ghost btn-block" onclick="exportAllData()">⬇ 전체 데이터 백업(내보내기)</button>` : ''}
-    <div class="card" style="padding:4px 16px;">
-      ${list.map(m => `
+  const manage = canManageMembers();
+  const q = (state.memberSearch||'').trim().toLowerCase();
+  let list = [...state.members].sort((a,b)=> a.role===b.role ? a.name.localeCompare(b.name) : (a.role==='admin'?-1:1));
+  if(q) list = list.filter(m => m.name.toLowerCase().includes(q) || (m.batch||'').toLowerCase().includes(q) || (m.title||'').toLowerCase().includes(q));
+  if(list.length === 0) return `<p class="helper" style="padding:12px 0;">검색 결과가 없어요</p>`;
+  return list.map(m => `
         <div class="member-row" style="align-items:flex-start;">
           <span style="cursor:pointer;" onclick="openMemberProfileModal('${m.id}')">
-            <span class="member-name">${m.name}${m.batch ? ` · ${m.batch}` : ''}${m.role==='admin' ? '<span class="role-badge">플랫폼관리자</span>' : ''}</span>
+            <span class="member-name">${m.name}${m.batch ? ` · ${m.batch}` : ''}${m.title ? `<span class="role-badge" style="background:var(--river);">${m.title}</span>` : ''}${m.role==='admin' ? '<span class="role-badge">플랫폼관리자</span>' : ''}</span>
             ${m.intro ? `<div class="req-sub" style="margin-top:2px;">${m.intro}</div>` : ''}
           </span>
           <span class="member-actions">
             ${admin && currentMember().id !== m.id ? `
               <button class="btn btn-ghost btn-sm" onclick="toggleRole('${m.id}')">${m.role==='admin'?'플랫폼관리자 해제':'플랫폼관리자 지정'}</button>
-              ${m.role!=='admin' ? `<button class="btn btn-ghost btn-sm" onclick="toggleWrite('${m.id}')">${m.canWrite?'글쓰기 권한 회수':'글쓰기 권한 부여'}</button>` : ''}
+              <button class="btn btn-ghost btn-sm" onclick="openTitleModal('${m.id}')">직함 설정</button>
+              ${m.role!=='admin' ? `
+                <button class="btn btn-ghost btn-sm" onclick="togglePerm('${m.id}','meetup')">모임${m.permMeetup?' ✓':''}</button>
+                <button class="btn btn-ghost btn-sm" onclick="togglePerm('${m.id}','notice')">공지${m.permNotice?' ✓':''}</button>
+                <button class="btn btn-ghost btn-sm" onclick="togglePerm('${m.id}','feed')">소식${m.permFeed?' ✓':''}</button>
+                <button class="btn btn-ghost btn-sm" onclick="togglePerm('${m.id}','members')">회원${m.permMembers?' ✓':''}</button>
+                <button class="btn btn-ghost btn-sm" onclick="togglePerm('${m.id}','mypage')">마이페이지${m.permMypage?' ✓':''}</button>
+              ` : ''}
+            ` : ''}
+            ${manage && currentMember().id !== m.id ? `
               <button class="btn btn-ghost btn-sm" onclick="adminResetPin('${m.id}')">PIN 재설정</button>
-              <button class="btn btn-coral btn-sm" onclick="removeMember('${m.id}')">제외</button>
+              ${admin ? `<button class="btn btn-coral btn-sm" onclick="removeMember('${m.id}')">제외</button>` : ''}
             ` : ''}
           </span>
         </div>
-      `).join('')}
+      `).join('');
+}
+function onMemberSearch(v){
+  state.memberSearch = v;
+  const el = document.getElementById('memberListArea');
+  if(el) el.innerHTML = renderMemberList();
+}
+function renderMembersTab(){
+  const admin = isAdmin();
+  const manage = canManageMembers();
+  const thisMonth = ymd(new Date()).slice(0,7);
+  const stats = admin ? {
+    총회원: state.members.length,
+    이번달신규: state.members.filter(m => m.joinedAt.slice(0,7) === thisMonth).length,
+    총모임: state.meetups.length,
+    이번달모임: state.meetups.filter(mt => mt.date.slice(0,7) === thisMonth).length,
+    누적참석: state.meetups.reduce((s,mt)=>s+mt.participants.filter(p=>p.status==='confirmed').length,0),
+    총공지: state.notices.length,
+    총소식: state.posts.length,
+  } : null;
+  const daysSinceBackup = state.lastBackupAt ? Math.floor((Date.now() - state.lastBackupAt) / 86400000) : null;
+  const backupReminder = (admin && (daysSinceBackup === null || daysSinceBackup >= 14)) ? `
+    <div class="card" style="background:#FFF7E8; border-color:#F0DCA8;">
+      <p class="helper" style="margin:0 0 8px; color:#8A6314;">${daysSinceBackup === null ? '아직 백업한 기록이 없어요.' : `마지막 백업으로부터 ${daysSinceBackup}일 지났어요.`} 정기적으로 백업해두시길 권해요.</p>
+      <button class="btn btn-accent btn-sm" onclick="exportAllData()">지금 백업하기</button>
+    </div>
+  ` : '';
+  const pendingCount = state.meetups.filter(mt => mt.status === 'pending').length;
+  return `
+    <div class="card">
+      <h3>동문 ${state.members.length}명</h3>
+      <p class="meetup-meta">함께하는 우리 동문들</p>
+    </div>
+    ${admin ? `
+    <div class="section-title">운영 현황</div>
+    <div class="card" style="display:grid; grid-template-columns:1fr 1fr 1fr; gap:12px; text-align:center;">
+      <div><div class="disp" style="font-size:20px; font-weight:800;">${stats.총회원}</div><div class="req-sub">전체 동문</div></div>
+      <div><div class="disp" style="font-size:20px; font-weight:800;">${stats.이번달신규}</div><div class="req-sub">이번달 신규</div></div>
+      <div><div class="disp" style="font-size:20px; font-weight:800;">${stats.총모임}</div><div class="req-sub">전체 모임</div></div>
+      <div><div class="disp" style="font-size:20px; font-weight:800;">${stats.이번달모임}</div><div class="req-sub">이번달 모임</div></div>
+      <div><div class="disp" style="font-size:20px; font-weight:800;">${stats.누적참석}</div><div class="req-sub">누적 참석(연인원)</div></div>
+      <div><div class="disp" style="font-size:20px; font-weight:800;">${stats.총공지+stats.총소식}</div><div class="req-sub">공지+소식</div></div>
+    </div>
+    ${backupReminder}
+    ${pendingCount ? `<button class="btn btn-accent btn-block" onclick="openPendingMeetupsModal()">🕓 승인 대기 모임 (${pendingCount})</button>` : ''}
+    <button class="btn btn-ghost btn-block" onclick="exportYearlyReport()">📊 연간 리포트 엑셀 다운로드</button>
+    <button class="btn btn-ghost btn-block" onclick="exportAllData()">⬇ 전체 데이터 백업(내보내기)</button>
+    <button class="btn btn-ghost btn-block" onclick="openActivityLogModal()">🗒 관리자 활동 로그 보기</button>
+    <button class="btn btn-ghost btn-block" onclick="openReportsModal()">🚩 신고 내역 보기${state.reports && state.reports.filter(r=>!r.resolved).length ? ` (${state.reports.filter(r=>!r.resolved).length})` : ''}</button>
+    ` : ''}
+    <div class="field" style="margin-top:12px;"><input id="memberSearchInput" placeholder="🔍 이름·기수·직함 검색" value="${state.memberSearch||''}" oninput="onMemberSearch(this.value)"></div>
+    <div class="card" style="padding:4px 16px;">
+      <div id="memberListArea">${renderMemberList()}</div>
     </div>
   `;
 }
