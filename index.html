@@ -1334,17 +1334,15 @@ function openMeetupModal(){
     <button class="btn btn-accent btn-block" style="margin-top:14px;" onclick="addMeetup({title:document.getElementById('mtTitle').value, date:document.getElementById('mtDate').value, time:document.getElementById('mtTime').value, location:document.getElementById('mtLocation').value, capacity:document.getElementById('mtCapacity').value, mapUrl:document.getElementById('mtMapUrl').value, subgroup:document.getElementById('mtSubgroup').value, info:document.getElementById('mtInfo').value})">모임 등록</button>
   `);
 }
-function openParticipantsModal(id){
-  const mt = state.meetups.find(m => m.id === id);
-  if(!mt) return;
+function participantsSectionHtml(mt){
   if(!mt.attendanceCode){ mt.attendanceCode = String(Math.floor(1000 + Math.random()*9000)); saveMeetups(); }
   const confirmed = mt.participants.filter(p=>p.status==='confirmed');
   const waiting = mt.participants.filter(p=>p.status==='waiting');
   const admin = isAdmin();
   const me = currentMember();
   const winOpen = attendanceWindowOpen(mt);
-
   const groups = getSubgroups(mt);
+
   const rowHtml = p => {
     const attBadge = p.attended ? `<span class="badge badge-open">출석</span>` : `<span class="badge badge-past">미출석</span>`;
     const nameLabel = memberDisplayName(p.memberId);
@@ -1384,15 +1382,19 @@ function openParticipantsModal(id){
 
   const exportBtn = admin ? `<button class="btn btn-ghost btn-block" onclick="exportMeetupParticipants('${mt.id}')">⬇ 참가자 명단 엑셀로 내보내기</button>` : '';
 
-  openModal(mt.title, `
-    <p class="helper">${fmtDateKR(mt.date)} ${mt.time} · ${mt.location}</p>
+  return `
     ${adminCodeHtml}
     ${checkinHtml}
     ${exportBtn}
     <div class="section-title">확정 (${confirmed.length}${mt.capacity>0 ? '/'+mt.capacity : ''})</div>
     ${confirmed.length ? `<div class="p-table-head"><span class="col-name">이름</span><span class="col-sub">소그룹</span><span class="col-att">출석</span></div>` + confirmed.map(rowHtml).join('') : '<p class="helper">아직 신청자가 없어요</p>'}
     ${waiting.length ? `<div class="section-title">대기 (${waiting.length})</div><div class="p-table-head"><span class="col-name">이름</span><span class="col-sub">소그룹</span><span class="col-att">출석</span></div>` + waiting.map(rowHtml).join('') : ''}
-  `);
+  `;
+}
+function openParticipantsModal(id){
+  const mt = state.meetups.find(m => m.id === id);
+  if(!mt) return;
+  openModal(mt.title, `<p class="helper">${fmtDateKR(mt.date)} ${mt.time} · ${mt.location}</p>${participantsSectionHtml(mt)}`);
 }
 function openMemberProfileModal(memberId){
   const m = state.members.find(x => x.id === memberId);
@@ -1686,16 +1688,12 @@ function meetupCard(mt){
     if(isHost || isAdmin()) actions += `<button class="btn btn-ghost btn-sm" onclick="openEditMeetupModal('${mt.id}')">수정</button><button class="btn btn-ghost btn-sm" onclick="deleteMeetup('${mt.id}')">삭제</button>`;
   }
 
-  const previewList = mt.participants.filter(p=>p.status==='confirmed').slice(0,4)
-    .map(p => memberDisplayName(p.memberId)).join(', ');
-  const moreCount = confirmed - Math.min(confirmed,4);
-
   return `
     <div class="meetup">
       ${mt.image ? `<img class="post-image" style="margin-bottom:10px;" src="${mt.image}">` : ''}
       <div class="meetup-top">
         <div>
-          <p class="meetup-title" onclick="openParticipantsModal('${mt.id}')" style="cursor:pointer;">${mt.title}</p>
+          <p class="meetup-title">${mt.title}</p>
           ${groups.length ? groups.map(g=>`<span class="badge badge-open" style="margin:2px 4px 6px 0; display:inline-block;">${g}</span>`).join('') : ''}
           <p class="meetup-meta">
             📅 ${fmtDateKR(mt.date)} · ${mt.time}<br>
@@ -1703,11 +1701,11 @@ function meetupCard(mt){
             👥 ${confirmed}${mt.capacity>0 ? '/'+mt.capacity : '명'} 참여${mt.participants.filter(p=>p.status==='waiting').length ? ` · 대기 ${mt.participants.filter(p=>p.status==='waiting').length}명` : ''}
           </p>
           ${mt.info ? `<p class="post-content" style="margin-top:8px;">${mt.info.replace(/\n/g,'<br>')}</p>` : ''}
-          ${confirmed ? `<p class="meetup-meta" style="margin-top:6px;">🙋 ${previewList}${moreCount>0 ? ` 외 ${moreCount}명` : ''} · <button class="link-btn" onclick="openParticipantsModal('${mt.id}')">참가자 보기</button></p>` : ''}
         </div>
         ${badge}
       </div>
       <div class="meetup-actions">${actions}</div>
+      ${!isPending ? `<div style="margin-top:14px; border-top:1px solid var(--line); padding-top:12px;">${participantsSectionHtml(mt)}</div>` : ''}
     </div>
   `;
 }
