@@ -160,11 +160,12 @@ main#app{padding:16px 16px 4px;}
 .meetup-actions{display:flex; gap:8px; margin-top:10px;}
 
 /* members */
-.member-row{display:flex; align-items:center; justify-content:space-between; padding:11px 4px; border-bottom:1px solid var(--line);}
+.member-row{padding:11px 4px; border-bottom:1px solid var(--line);}
 .member-row:last-child{border-bottom:none;}
-.member-name{font-weight:600; font-size:13.5px; display:flex; align-items:center; gap:6px;}
+.member-name{font-weight:600; font-size:13.5px; display:flex; align-items:center; gap:6px; flex-wrap:wrap;}
 .role-badge{font-size:10px; font-weight:700; background:var(--ink); color:#fff; padding:2px 6px; border-radius:6px;}
-.member-actions{display:flex; gap:6px;}
+.member-actions{display:flex; gap:6px; margin-top:8px; overflow-x:auto; -webkit-overflow-scrolling:touch; padding-bottom:2px;}
+.member-actions .btn{flex-shrink:0; white-space:nowrap;}
 
 /* forms */
 .field{margin-bottom:12px;}
@@ -276,7 +277,7 @@ main#app{padding:16px 16px 4px;}
 
   <footer class="app-footer">
     <div class="footer-divider"></div>
-    <p class="footer-brand">Youngdong High School Alumni Association</p>
+    <p class="footer-brand">Youngdong Alumni Association</p>
     <p style="font-size:16px; font-weight:800; color:var(--ink); margin:0 0 10px;">서울영동고등학교 총동문회장 홍제선</p>
     <p class="footer-credit">개발·제작·관리 : <b>문준래 JUNLAE MOON</b></p>
     <p class="footer-contact">제휴 · 제안 · 사업 · 기술지원 · 홍보 · 후원 문의 : <a href="mailto:junlae.moon@gmail.com">junlae.moon@gmail.com</a></p>
@@ -401,9 +402,17 @@ function togglePerm(id, type){
   showToast(`${m.name}님의 ${PERM_LABEL[type]} 권한을 ${m[field] ? '부여' : '회수'}했어요`);
   renderAll();
 }
+function maskName(name){
+  if(!name) return '';
+  if(name.length <= 1) return name;
+  return name[0] + '*'.repeat(name.length - 1);
+}
 function memberDisplayName(id, fallback){
   const m = state.members.find(x => x.id === id);
-  if(m) return m.name + (m.batch ? ' · ' + m.batch : '');
+  if(m){
+    if(!currentMember()) return maskName(m.name);
+    return m.name + (m.batch ? ' · ' + m.batch : '');
+  }
   return fallback || '알 수 없음';
 }
 function showToast(msg){
@@ -1407,10 +1416,20 @@ function openMemberProfileModal(memberId){
   const m = state.members.find(x => x.id === memberId);
   if(!m) return;
   const me = currentMember();
-  let contactHtml;
+
   if(!me){
-    contactHtml = `<p class="helper">연락처 요청은 로그인 후 가능해요.</p>`;
-  } else if(me.id === memberId){
+    openModal(maskName(m.name), `
+      <div class="profile-card" style="margin-bottom:14px;">
+        <p class="profile-name">${maskName(m.name)}</p>
+      </div>
+      <p class="helper">로그인하면 동문 정보를 더 볼 수 있고, 연락처도 요청할 수 있어요.</p>
+      <button class="btn btn-accent btn-block" onclick="openAuthModal()">로그인 / 회원가입</button>
+    `);
+    return;
+  }
+
+  let contactHtml;
+  if(me.id === memberId){
     contactHtml = `<p class="helper">본인 프로필이에요. 마이페이지에서 수정할 수 있어요.</p>`;
   } else {
     const cs = contactStateWith(memberId);
@@ -1439,6 +1458,7 @@ function openMemberProfileModal(memberId){
         <span class="pill">${m.role==='admin' ? '플랫폼관리자' : '동문'}</span>
       </div>
     </div>
+  `+`
     ${adminDetail}
     ${editOthersBtn}
     ${contactHtml}
@@ -1623,7 +1643,8 @@ function renderCalendar(){
   const cells = [];
   for(let i=startPad-1; i>=0; i--) cells.push({d: daysInPrev-i, pad:true});
   for(let d=1; d<=daysInMonth; d++) cells.push({d, pad:false, dateStr: `${y}-${String(m+1).padStart(2,'0')}-${String(d).padStart(2,'0')}`});
-  while(cells.length % 7 !== 0) cells.push({d: cells.length, pad:true});
+  let nextDay = 1;
+  while(cells.length % 7 !== 0) cells.push({d: nextDay++, pad:true});
 
   const todayStr = ymd(new Date());
   const eventDates = new Set(visibleMeetups().map(mt => mt.date));
@@ -1782,18 +1803,31 @@ function saveTitleFor(memberId){
 function renderMemberList(){
   const admin = isAdmin();
   const manage = canManageMembers();
+  const me = currentMember();
   const q = (state.memberSearch||'').trim().toLowerCase();
   let list = [...state.members].sort((a,b)=> a.role===b.role ? a.name.localeCompare(b.name) : (a.role==='admin'?-1:1));
   if(q) list = list.filter(m => m.name.toLowerCase().includes(q) || (m.batch||'').toLowerCase().includes(q) || (m.title||'').toLowerCase().includes(q));
   if(list.length === 0) return `<p class="helper" style="padding:12px 0;">검색 결과가 없어요</p>`;
+  if(!me){
+    return `
+      <p class="helper" style="padding:8px 0 12px;">로그인하면 동문 이름과 정보를 볼 수 있어요.</p>
+      ${list.map(m => `
+        <div class="member-row">
+          <span style="cursor:pointer;" onclick="openMemberProfileModal('${m.id}')">
+            <span class="member-name">${maskName(m.name)}</span>
+          </span>
+        </div>
+      `).join('')}
+    `;
+  }
   return list.map(m => `
-        <div class="member-row" style="align-items:flex-start;">
+        <div class="member-row">
           <span style="cursor:pointer;" onclick="openMemberProfileModal('${m.id}')">
             <span class="member-name">${m.name}${m.batch ? ` · ${m.batch}` : ''}${m.title ? `<span class="role-badge" style="background:var(--river);">${m.title}</span>` : ''}${m.role==='admin' ? '<span class="role-badge">플랫폼관리자</span>' : ''}</span>
             ${m.intro ? `<div class="req-sub" style="margin-top:2px;">${m.intro}</div>` : ''}
           </span>
           <span class="member-actions">
-            ${admin && currentMember().id !== m.id ? `
+            ${admin && me.id !== m.id ? `
               <button class="btn btn-ghost btn-sm" onclick="toggleRole('${m.id}')">${m.role==='admin'?'플랫폼관리자 해제':'플랫폼관리자 지정'}</button>
               <button class="btn btn-ghost btn-sm" onclick="openTitleModal('${m.id}')">직함 설정</button>
               ${m.role!=='admin' ? `
@@ -1804,7 +1838,7 @@ function renderMemberList(){
                 <button class="btn btn-ghost btn-sm" onclick="togglePerm('${m.id}','mypage')">마이페이지${m.permMypage?' ✓':''}</button>
               ` : ''}
             ` : ''}
-            ${manage && currentMember().id !== m.id ? `
+            ${manage && me.id !== m.id ? `
               <button class="btn btn-ghost btn-sm" onclick="adminResetPin('${m.id}')">PIN 재설정</button>
               ${admin ? `<button class="btn btn-coral btn-sm" onclick="removeMember('${m.id}')">제외</button>` : ''}
             ` : ''}
