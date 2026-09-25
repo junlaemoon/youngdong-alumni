@@ -74,7 +74,9 @@ body{
 .crew-logo{width:54px; height:54px; border-radius:50%; background:#fff; padding:3px; box-shadow:0 2px 10px rgba(0,0,0,.28); flex-shrink:0; object-fit:contain;}
 .crew-title{font-size:18.5px; font-weight:700; margin:0; letter-spacing:-.01em; line-height:1.3;}
 .crew-sub{font-size:12.5px; color:rgba(255,255,255,.62); margin:6px 0 0;}
-.session-row{display:flex; justify-content:flex-end; margin:14px 16px 0;}
+.session-row{display:flex; justify-content:flex-end; align-items:center; gap:8px; margin:14px 16px 0;}
+.admin-bell{position:relative; cursor:pointer; font-size:18px; background:var(--card); border:1px solid var(--line); border-radius:50%; width:34px; height:34px; display:flex; align-items:center; justify-content:center; box-shadow:var(--shadow);}
+.admin-bell .badge-count{position:absolute; top:-4px; right:-4px; background:var(--coral); color:#fff; font-size:10px; font-weight:700; min-width:16px; height:16px; border-radius:8px; display:flex; align-items:center; justify-content:center; padding:0 3px;}
 .session-chip{
   font-size:11.5px; color:var(--ink); background:var(--card); font-weight:600;
   padding:6px 12px; border-radius:20px; cursor:pointer; border:1px solid var(--line);
@@ -270,6 +272,7 @@ main#app{padding:16px 16px 4px;}
   </div>
 
   <div class="session-row">
+    <div id="adminBell"></div>
     <div class="session-chip" id="sessionChip" onclick="onSessionChipClick()"></div>
   </div>
   <div class="tabs" id="tabs"></div>
@@ -431,8 +434,11 @@ const db = firebase.firestore();
 // 마지막으로 Firestore와 동기화된 상태의 스냅샷 (변경분만 골라 쓰기 위한 캐시)
 const fsCache = { members: {}, notices: {}, meetups: {}, requests: {}, posts: {} };
 
-async function loadCollection(name){
-  const snap = await db.collection(name).get();
+async function loadCollection(name, orderByField, limitN){
+  let ref = db.collection(name);
+  if(orderByField) ref = ref.orderBy(orderByField, 'desc');
+  if(limitN) ref = ref.limit(limitN);
+  const snap = await ref.get();
   const arr = [];
   snap.forEach(doc => {
     const data = { id: doc.id, ...doc.data() };
@@ -441,6 +447,33 @@ async function loadCollection(name){
   });
   return arr;
 }
+
+// 회원 목록(가장 큰 읽기 비용)은 버전이 바뀌지 않았으면 브라우저 캐시를 그대로 씀 (읽기 1건으로 절감)
+async function loadMembersWithCache(){
+  try{
+    const verSnap = await db.collection('meta').doc('dataVersion').get();
+    const serverVer = verSnap.exists ? (verSnap.data().members || 0) : 0;
+    const cachedRaw = localStorage.getItem('rc_members_cache');
+    if(cachedRaw){
+      const cached = JSON.parse(cachedRaw);
+      if(cached.ver === serverVer && Array.isArray(cached.data)){
+        cached.data.forEach(m => { fsCache.members[m.id] = JSON.parse(JSON.stringify(m)); });
+        return cached.data;
+      }
+    }
+    const fresh = await loadCollection('members');
+    try{ localStorage.setItem('rc_members_cache', JSON.stringify({ ver: serverVer, data: fresh })); }catch(e){ /* 저장공간 초과 등은 무시 */ }
+    return fresh;
+  }catch(e){
+    console.error(e);
+    return await loadCollection('members'); // 캐시 로직 실패 시 안전하게 폴백
+  }
+}
+
+// 옛 데이터가 쌓여도 읽기량이 계속 늘지 않도록, 최근 항목만 우선 불러옴 (과거 데이터는 삭제되지 않고 Firestore에 그대로 보존됨)
+const NOTICE_LOAD_LIMIT = 150;
+const MEETUP_LOAD_LIMIT = 300;
+const POST_LOAD_LIMIT = 150;
 
 // state.X 배열을 Firestore와 비교해서, 실제로 달라지거나 삭제된 문서만 씀 (쓰기 횟수 최소화)
 async function syncCollection(name, arr){
@@ -462,7 +495,13 @@ async function syncCollection(name, arr){
   arr.forEach(item => { fsCache[name][item.id] = JSON.parse(JSON.stringify(item)); });
 }
 
-async function saveMembers(){ try{ await syncCollection('members', state.members); }catch(e){ console.error(e); showToast('저장 실패, 다시 시도해주세요'); } }
+async function saveMembers(){
+  try{
+    await syncCollection('members', state.members);
+    db.collection('meta').doc('dataVersion').set({ members: firebase.firestore.FieldValue.increment(1) }, { merge: true }).catch(()=>{});
+    localStorage.removeItem('rc_members_cache'); // 이 브라우저도 다음 로드에 최신값을 다시 받게 함
+  }catch(e){ console.error(e); showToast('저장 실패, 다시 시도해주세요'); }
+}
 async function saveNotices(){ try{ await syncCollection('notices', state.notices); }catch(e){ console.error(e); showToast('저장 실패, 다시 시도해주세요'); } }
 async function saveMeetups(){ try{ await syncCollection('meetups', state.meetups); }catch(e){ console.error(e); showToast('저장 실패, 다시 시도해주세요'); } }
 async function saveRequests(){ try{ await syncCollection('requests', state.requests); }catch(e){ console.error(e); showToast('저장 실패, 다시 시도해주세요'); } }
@@ -480,11 +519,11 @@ function saveSession(){
 async function init(){
   try{
     [state.members, state.notices, state.meetups, state.requests, state.posts] = await Promise.all([
-      loadCollection('members'),
-      loadCollection('notices'),
-      loadCollection('meetups'),
+      loadMembersWithCache(),
+      loadCollection('notices', 'date', NOTICE_LOAD_LIMIT),
+      loadCollection('meetups', 'createdAt', MEETUP_LOAD_LIMIT),
       loadCollection('requests'),
-      loadCollection('posts'),
+      loadCollection('posts', 'createdAt', POST_LOAD_LIMIT),
     ]);
   }catch(e){
     console.error(e);
@@ -1487,6 +1526,54 @@ function renderSessionChip(){
   } else {
     chip.innerHTML = `로그인/회원가입`;
   }
+  renderAdminBell();
+}
+function getAdminLastSeen(){
+  const v = localStorage.getItem('rc_admin_lastSeen');
+  return v ? Number(v) : 0;
+}
+function collectNewItems(){
+  const since = getAdminLastSeen();
+  const newMembers = state.members.filter(m => m.joinedAt && new Date(m.joinedAt).getTime() > since);
+  const newMeetups = state.meetups.filter(mt => mt.createdAt > since);
+  const newNotices = state.notices.filter(n => n.date && new Date(n.date).getTime() > since);
+  const newPosts = state.posts.filter(p => p.createdAt > since);
+  const newParticipants = [];
+  state.meetups.forEach(mt => {
+    mt.participants.forEach(p => {
+      if(p.appliedAt > since) newParticipants.push({ meetupTitle: mt.title, memberId: p.memberId, appliedAt: p.appliedAt });
+    });
+  });
+  return { newMembers, newMeetups, newNotices, newPosts, newParticipants };
+}
+function renderAdminBell(){
+  const el = document.getElementById('adminBell');
+  if(!el) return;
+  if(!isAdmin()){ el.innerHTML = ''; return; }
+  const { newMembers, newMeetups, newNotices, newPosts, newParticipants } = collectNewItems();
+  const total = newMembers.length + newMeetups.length + newNotices.length + newPosts.length + newParticipants.length;
+  el.innerHTML = `
+    <div class="admin-bell" onclick="openAdminNotificationsModal()">
+      🔔${total > 0 ? `<span class="badge-count">${total > 99 ? '99+' : total}</span>` : ''}
+    </div>
+  `;
+}
+function openAdminNotificationsModal(){
+  const { newMembers, newMeetups, newNotices, newPosts, newParticipants } = collectNewItems();
+  const section = (title, items, renderItem) => items.length ? `
+    <div class="section-title">${title} (${items.length})</div>
+    ${items.map(renderItem).join('')}
+  ` : '';
+  openModal('새 소식 알림', `
+    ${(newMembers.length+newMeetups.length+newNotices.length+newPosts.length+newParticipants.length)===0 ? '<div class="empty">새로운 소식이 없어요</div>' : ''}
+    ${section('신규 가입자', newMembers, m => `<div class="req-row"><span class="req-name">${m.name}${m.batch?' · '+m.batch:''}</span><span class="req-sub">${m.joinedAt}</span></div>`)}
+    ${section('신규 모임', newMeetups, mt => `<div class="req-row" style="cursor:pointer;" onclick="closeModal(); openMeetupDetailModal('${mt.id}')"><span class="req-name">${mt.title}</span><span class="req-sub">${fmtDateKR(mt.date)}</span></div>`)}
+    ${section('신규 공지', newNotices, n => `<div class="req-row" style="cursor:pointer;" onclick="closeModal(); openNoticeDetailModal('${n.id}')"><span class="req-name">${n.title}</span><span class="req-sub">${n.date}</span></div>`)}
+    ${section('신규 소식(글)', newPosts, p => `<div class="req-row" style="cursor:pointer;" onclick="closeModal(); openPostDetailModal('${p.id}')"><span class="req-name">${p.title||'(제목없음)'}</span><span class="req-sub">${fmtTimeAgo(p.createdAt)}</span></div>`)}
+    ${section('신규 모임 참여자', newParticipants, p => `<div class="req-row"><span class="req-name">${memberDisplayName(p.memberId)}</span><span class="req-sub">${p.meetupTitle}</span></div>`)}
+  `);
+  localStorage.setItem('rc_admin_lastSeen', String(Date.now()));
+  renderAdminBell();
 }
 function onSessionChipClick(){
   if(currentMember()) state.tab = 'mypage';
