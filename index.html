@@ -1534,16 +1534,21 @@ function getAdminLastSeen(){
 }
 function collectNewItems(){
   const since = getAdminLastSeen();
-  const newMembers = state.members.filter(m => m.joinedAt && new Date(m.joinedAt).getTime() > since);
-  const newMeetups = state.meetups.filter(mt => mt.createdAt > since);
-  const newNotices = state.notices.filter(n => n.date && new Date(n.date).getTime() > since);
-  const newPosts = state.posts.filter(p => p.createdAt > since);
+  const newMembers = state.members.filter(m => m.joinedAt && new Date(m.joinedAt).getTime() > since)
+    .sort((a,b) => new Date(b.joinedAt).getTime() - new Date(a.joinedAt).getTime());
+  const newMeetups = state.meetups.filter(mt => mt.createdAt > since)
+    .sort((a,b) => b.createdAt - a.createdAt);
+  const newNotices = state.notices.filter(n => n.date && new Date(n.date).getTime() > since)
+    .sort((a,b) => new Date(b.date).getTime() - new Date(a.date).getTime());
+  const newPosts = state.posts.filter(p => p.createdAt > since)
+    .sort((a,b) => b.createdAt - a.createdAt);
   const newParticipants = [];
   state.meetups.forEach(mt => {
     mt.participants.forEach(p => {
       if(p.appliedAt > since) newParticipants.push({ meetupTitle: mt.title, memberId: p.memberId, appliedAt: p.appliedAt });
     });
   });
+  newParticipants.sort((a,b) => b.appliedAt - a.appliedAt);
   return { newMembers, newMeetups, newNotices, newPosts, newParticipants };
 }
 function renderAdminBell(){
