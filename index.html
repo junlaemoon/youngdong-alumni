@@ -379,6 +379,13 @@ function currentMember(){
 }
 function isAdmin(){ const m = currentMember(); return !!m && m.role === 'admin'; }
 const PERM_LABEL = { meetup: '모임 생성', notice: '공지 작성', feed: '소식 작성', members: '회원 관리', mypage: '동문정보 관리' };
+const TIER_LABEL = { office: '총동문회 사무국', officer: '모임 임원', member: '일반 회원' };
+const TIER_RANK = { member: 1, officer: 2, office: 3 };
+function memberTier(m){ return (m && m.tier) || 'member'; }
+function meetsTier(mt, me){
+  const need = TIER_RANK[mt.requiredTier || 'member'] || 1;
+  return TIER_RANK[memberTier(me)] >= need;
+}
 const PERM_FIELD = { meetup: 'permMeetup', notice: 'permNotice', feed: 'permFeed', members: 'permMembers', mypage: 'permMypage' };
 function hasPerm(type){
   const m = currentMember();
@@ -753,7 +760,7 @@ function openActivityLogModal(){
         <span><span class="req-name">${r.action}</span>${r.detail ? ` <span class="req-sub">· ${r.detail}</span>` : ''}<br><span class="req-sub">${r.actorName} · ${new Date(r.at).toLocaleString('ko-KR')}</span></span>
       </div>
     `).join('')}
-  `);
+  `, true);
 }
 
 /* ---------------------------------------------------------
@@ -921,6 +928,7 @@ function addMeetup(data){
     participants: [],
     attendanceCode: String(Math.floor(1000 + Math.random()*9000)),
     status: needsApproval ? 'pending' : 'approved',
+    requiredTier: data.requiredTier || 'member',
     createdAt: Date.now(),
   });
   pendingPostImage = null;
@@ -981,6 +989,13 @@ function openEditMeetupModal(id){
       <div class="field"><label>시작시간</label><input id="editMtTime" type="time" value="${mt.time}"></div>
     </div>
     <div class="field"><label>모임 정원 (0 = 제한 없음)</label><input id="editMtCapacity" type="number" min="0" value="${mt.capacity}"></div>
+    <div class="field"><label>참석 가능 등급</label>
+      <select id="editMtRequiredTier">
+        <option value="member" ${(mt.requiredTier||'member')==='member'?'selected':''}>전체 회원</option>
+        <option value="officer" ${mt.requiredTier==='officer'?'selected':''}>모임 임원 이상</option>
+        <option value="office" ${mt.requiredTier==='office'?'selected':''}>총동문회 사무국만</option>
+      </select>
+    </div>
     <div class="field"><label>장소</label><input id="editMtLocation" value="${mt.location.replace(/"/g,'&quot;')}"></div>
     <div class="field"><label>장소 지도 링크 (선택)</label><input id="editMtMapUrl" value="${(mt.mapUrl||'').replace(/"/g,'&quot;')}" placeholder="https://naver.me/... 또는 https://map.kakao.com/..."></div>
     <div class="field"><label>모임 소그룹 (선택)</label><textarea id="editMtSubgroup" style="min-height:70px;" placeholder="한 줄에 하나씩 (Shift+Enter로 줄바꿈)">${getSubgroups(mt).join('\n')}</textarea><p class="helper">항목을 넣으면 신청자가 신청할 때 이 중에서 골라 신청해요.</p></div>
@@ -1000,12 +1015,13 @@ function saveEditedMeetup(id){
   const time = document.getElementById('editMtTime').value;
   const location = document.getElementById('editMtLocation').value.trim();
   const capacity = Number(document.getElementById('editMtCapacity').value) || 0;
+  const requiredTier = document.getElementById('editMtRequiredTier').value;
   const mapUrl = document.getElementById('editMtMapUrl').value.trim();
   const subgroup = document.getElementById('editMtSubgroup').value.trim();
   const info = document.getElementById('editMtInfo').value.trim();
   if(!title || !date || !time || !location){ showToast('모임 이름 · 일시 · 장소는 꼭 입력해주세요'); return; }
   mt.title = title; mt.date = date; mt.time = time; mt.location = location; mt.capacity = capacity;
-  mt.mapUrl = mapUrl; mt.subgroups = subgroup.split('\n').map(s=>s.trim()).filter(Boolean); mt.info = info; mt.image = pendingPostImage;
+  mt.mapUrl = mapUrl; mt.subgroups = subgroup.split('\n').map(s=>s.trim()).filter(Boolean); mt.info = info; mt.image = pendingPostImage; mt.requiredTier = requiredTier;
   if(capacity > 0){
     const confirmed = mt.participants.filter(p => p.status === 'confirmed').sort((a,b)=>a.appliedAt-b.appliedAt);
     confirmed.forEach((p, i) => { p.status = i < capacity ? 'confirmed' : 'waiting'; });
@@ -1032,6 +1048,7 @@ function openJoinModal(id){
   if(!requireLogin()) return;
   const mt = state.meetups.find(m => m.id === id);
   if(!mt) return;
+  if(!meetsTier(mt, currentMember())){ showToast(`이 모임은 "${TIER_LABEL[mt.requiredTier]} 이상"만 신청할 수 있어요`); return; }
   const groups = getSubgroups(mt);
   openModal('참여 신청', `
     <p class="helper">${mt.title}</p>
@@ -1048,6 +1065,7 @@ function joinMeetup(id, subgroup){
   const me = currentMember();
   const mt = state.meetups.find(m => m.id === id);
   if(!mt) return;
+  if(!meetsTier(mt, me)){ showToast(`이 모임은 "${TIER_LABEL[mt.requiredTier]} 이상"만 신청할 수 있어요`); return; }
   if(mt.participants.some(p => p.memberId === me.id)){ showToast('이미 신청했어요'); return; }
   const full = mt.capacity > 0 && confirmedCount(mt) >= mt.capacity;
   mt.participants.push({ memberId: me.id, status: full ? 'waiting' : 'confirmed', appliedAt: Date.now(), wasWaiting: full, notifiedPromotion: true, subgroup: subgroup || null, attended: false });
@@ -1292,9 +1310,9 @@ function fmtTimeAgo(ts){
    모달
 --------------------------------------------------------- */
 function closeModal(){ document.getElementById('modal-root').innerHTML = ''; }
-function openModal(title, bodyHtml){
+function openModal(title, bodyHtml, closeOnBackdrop){
   document.getElementById('modal-root').innerHTML = `
-    <div class="modal-backdrop">
+    <div class="modal-backdrop" ${closeOnBackdrop ? `onclick="if(event.target===this) closeModal()"` : ''}>
       <div class="modal-sheet">
         <div class="modal-head"><h2 class="disp">${title}</h2><button class="modal-close" onclick="closeModal()">✕</button></div>
         ${bodyHtml}
@@ -1316,7 +1334,7 @@ function openPolicyModal(){
       개인정보 관련 문의는 하단 이메일(junlae.moon@gmail.com)로 연락 주세요.</p>
       <p style="margin-top:14px; color:#B0B6C2;">본 방침은 비영리 동문회 운영 목적의 자체 제작 서비스에 적용되며, 2026년 기준으로 작성되었습니다.</p>
     </div>
-  `);
+  `, true);
 }
 function openAuthModal(){
   openModal('로그인 / 가입', `
@@ -1380,13 +1398,20 @@ function openMeetupModal(){
       <div class="field"><label>시작시간</label><input id="mtTime" type="time" value="06:00"></div>
     </div>
     <div class="field"><label>모임 정원 (0 = 제한 없음)</label><input id="mtCapacity" type="number" min="0" value="0"></div>
+    <div class="field"><label>참석 가능 등급</label>
+      <select id="mtRequiredTier">
+        <option value="member">전체 회원</option>
+        <option value="officer">모임 임원 이상</option>
+        <option value="office">총동문회 사무국만</option>
+      </select>
+    </div>
     <div class="field"><label>장소</label><input id="mtLocation" placeholder="예: 영동고등학교 대강당"></div>
     <div class="field"><label>장소 지도 링크 (선택)</label><input id="mtMapUrl" placeholder="https://naver.me/... 또는 https://map.kakao.com/..."></div>
     <div class="field"><label>모임 소그룹 (선택)</label><textarea id="mtSubgroup" placeholder="신청자가 고를 항목을 한 줄에 하나씩 입력하세요 (Shift+Enter로 줄바꿈)&#10;예: 개인전&#10;단체전&#10;갤러리" style="min-height:70px;"></textarea><p class="helper">항목을 넣으면 신청자가 신청할 때 이 중에서 골라 신청해요. 비워두면 그냥 일반 신청으로 진행돼요.</p></div>
     <div class="field"><label>모임 정보</label><textarea id="mtInfo" class="tall" placeholder="준비물, 참가비, 진행 순서 등 자세한 안내를 적어주세요"></textarea></div>
     <label class="file-btn">📷 대표 사진 추가 (선택)<input type="file" accept="image/*" style="display:none" onchange="handleImageSelect(this)"></label>
     <img id="postImagePreview" class="image-preview">
-    <button class="btn btn-accent btn-block" style="margin-top:14px;" onclick="addMeetup({title:document.getElementById('mtTitle').value, date:document.getElementById('mtDate').value, time:document.getElementById('mtTime').value, location:document.getElementById('mtLocation').value, capacity:document.getElementById('mtCapacity').value, mapUrl:document.getElementById('mtMapUrl').value, subgroup:document.getElementById('mtSubgroup').value, info:document.getElementById('mtInfo').value})">모임 등록</button>
+    <button class="btn btn-accent btn-block" style="margin-top:14px;" onclick="addMeetup({title:document.getElementById('mtTitle').value, date:document.getElementById('mtDate').value, time:document.getElementById('mtTime').value, location:document.getElementById('mtLocation').value, capacity:document.getElementById('mtCapacity').value, mapUrl:document.getElementById('mtMapUrl').value, subgroup:document.getElementById('mtSubgroup').value, info:document.getElementById('mtInfo').value, requiredTier:document.getElementById('mtRequiredTier').value})">모임 등록</button>
   `);
 }
 function participantsSectionHtml(mt){
@@ -1449,7 +1474,7 @@ function participantsSectionHtml(mt){
 function openParticipantsModal(id){
   const mt = state.meetups.find(m => m.id === id);
   if(!mt) return;
-  openModal(mt.title, `<p class="helper">${fmtDateKR(mt.date)} ${mt.time} · ${mt.location}</p>${participantsSectionHtml(mt)}`);
+  openModal(mt.title, `<p class="helper">${fmtDateKR(mt.date)} ${mt.time} · ${mt.location}</p>${participantsSectionHtml(mt)}`, true);
 }
 function openMemberProfileModal(memberId){
   const m = state.members.find(x => x.id === memberId);
@@ -1501,7 +1526,7 @@ function openMemberProfileModal(memberId){
     ${adminDetail}
     ${editOthersBtn}
     ${contactHtml}
-  `);
+  `, true);
 }
 function openPostModal(){
   if(!requireWritePermission('feed')) return;
@@ -1576,7 +1601,7 @@ function openAdminNotificationsModal(){
     ${section('신규 공지', newNotices, n => `<div class="req-row" style="cursor:pointer;" onclick="closeModal(); openNoticeDetailModal('${n.id}')"><span class="req-name">${n.title}</span><span class="req-sub">${n.date}</span></div>`)}
     ${section('신규 소식(글)', newPosts, p => `<div class="req-row" style="cursor:pointer;" onclick="closeModal(); openPostDetailModal('${p.id}')"><span class="req-name">${p.title||'(제목없음)'}</span><span class="req-sub">${fmtTimeAgo(p.createdAt)}</span></div>`)}
     ${section('신규 모임 참여자', newParticipants, p => `<div class="req-row"><span class="req-name">${memberDisplayName(p.memberId)}</span><span class="req-sub">${p.meetupTitle}</span></div>`)}
-  `);
+  `, true);
   localStorage.setItem('rc_admin_lastSeen', String(Date.now()));
   renderAdminBell();
 }
@@ -1634,7 +1659,7 @@ function noticeCardCompact(n){
 function openNoticeDetailModal(id){
   const n = state.notices.find(x=>x.id===id);
   if(!n) return;
-  openModal('공지', noticeCardFull(n));
+  openModal('공지', noticeCardFull(n), true);
 }
 function renderNoticeList(){
   const q = (state.noticeSearch||'').trim().toLowerCase();
@@ -1702,7 +1727,7 @@ function postCardCompact(p){
 function openPostDetailModal(id){
   const p = state.posts.find(x=>x.id===id);
   if(!p) return;
-  openModal('소식', postCardFull(p));
+  openModal('소식', postCardFull(p), true);
 }
 function renderFeedList(){
   const q = (state.feedSearch||'').trim().toLowerCase();
@@ -1801,8 +1826,10 @@ function meetupCard(mt){
       actions = `<span class="helper" style="margin:0;">관리자 승인을 기다리고 있어요</span>`;
     }
   } else if(!isPast){
+    const eligible = !currentMember() || meetsTier(mt, currentMember());
     if(myStatus === 'confirmed') actions = `<button class="btn btn-coral btn-sm" onclick="cancelMeetup('${mt.id}')">신청 취소</button>`;
     else if(myStatus === 'waiting') actions = `<button class="btn btn-ghost btn-sm" disabled>대기중</button><button class="btn btn-coral btn-sm" onclick="cancelMeetup('${mt.id}')">취소</button>`;
+    else if(!eligible) actions = `<span class="helper" style="margin:0;">"${TIER_LABEL[mt.requiredTier]} 이상"만 신청 가능해요</span>`;
     else if(groups.length) actions = `<button class="btn btn-accent btn-sm" onclick="openJoinModal('${mt.id}')">${full ? '대기 신청' : '참여 신청'}</button>`;
     else actions = `<button class="btn btn-accent btn-sm" onclick="joinMeetup('${mt.id}', null)">${full ? '대기 신청' : '참여 신청'}</button>`;
     if(isHost || isAdmin()) actions += `<button class="btn btn-ghost btn-sm" onclick="openEditMeetupModal('${mt.id}')">수정</button><button class="btn btn-ghost btn-sm" onclick="deleteMeetup('${mt.id}')">삭제</button>`;
@@ -1814,6 +1841,7 @@ function meetupCard(mt){
       <div class="meetup-top">
         <div>
           <p class="meetup-title">${mt.title}</p>
+          ${(mt.requiredTier && mt.requiredTier !== 'member') ? `<span class="badge badge-full" style="margin:2px 4px 6px 0; display:inline-block;">🔒 ${TIER_LABEL[mt.requiredTier]} 이상</span>` : ''}
           ${groups.length ? groups.map(g=>`<span class="badge badge-open" style="margin:2px 4px 6px 0; display:inline-block;">${g}</span>`).join('') : ''}
           <p class="meetup-meta">
             📅 ${fmtDateKR(mt.date)} · ${mt.time}<br>
@@ -1845,7 +1873,7 @@ function meetupCardCompact(mt){
 function openMeetupDetailModal(id){
   const mt = state.meetups.find(m => m.id === id);
   if(!mt) return;
-  openModal('모임 상세', meetupCard(mt));
+  openModal('모임 상세', meetupCard(mt), true);
 }
 function visibleMeetups(){
   const me = currentMember();
@@ -1892,6 +1920,31 @@ function saveTitleFor(memberId){
   showToast('직함을 저장했어요');
   renderAll();
 }
+function openTierModal(memberId){
+  const m = state.members.find(x=>x.id===memberId);
+  if(!m) return;
+  openModal('모임 참석 등급', `
+    <p class="helper">직함과는 별개로, 이 동문이 신청할 수 있는 모임 등급을 정해요. 모임 생성 시 "참석 가능 등급"을 지정하면 여기서 정한 등급 이상만 신청할 수 있어요.</p>
+    <div class="field">
+      <select id="tierInput">
+        <option value="member" ${memberTier(m)==='member'?'selected':''}>일반 회원</option>
+        <option value="officer" ${memberTier(m)==='officer'?'selected':''}>모임 임원</option>
+        <option value="office" ${memberTier(m)==='office'?'selected':''}>총동문회 사무국</option>
+      </select>
+    </div>
+    <button class="btn btn-accent btn-block" onclick="saveTierFor('${memberId}')">저장</button>
+  `);
+}
+function saveTierFor(memberId){
+  const m = state.members.find(x=>x.id===memberId);
+  if(!m) return;
+  m.tier = document.getElementById('tierInput').value;
+  saveMembers();
+  logActivity('참석등급 설정', `${m.name} · ${TIER_LABEL[m.tier]}`);
+  closeModal();
+  showToast('참석 등급을 저장했어요');
+  renderAll();
+}
 function renderMemberList(){
   const admin = isAdmin();
   const manage = canManageMembers();
@@ -1922,6 +1975,7 @@ function renderMemberList(){
             ${admin && me.id !== m.id ? `
               <button class="btn btn-ghost btn-sm" onclick="toggleRole('${m.id}')">${m.role==='admin'?'플랫폼관리자 해제':'플랫폼관리자 지정'}</button>
               <button class="btn btn-ghost btn-sm" onclick="openTitleModal('${m.id}')">직함 설정</button>
+              <button class="btn btn-ghost btn-sm" onclick="openTierModal('${m.id}')">참석등급: ${TIER_LABEL[memberTier(m)]}</button>
               ${m.role!=='admin' ? `
                 <button class="btn btn-ghost btn-sm" onclick="togglePerm('${m.id}','meetup')">모임${m.permMeetup?' ✓':''}</button>
                 <button class="btn btn-ghost btn-sm" onclick="togglePerm('${m.id}','notice')">공지${m.permNotice?' ✓':''}</button>
