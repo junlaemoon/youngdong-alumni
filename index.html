@@ -273,6 +273,7 @@ main#app{padding:16px 16px 4px;}
 
   <div class="session-row">
     <div id="adminBell"></div>
+    <div id="memberBell"></div>
     <div class="session-chip" id="sessionChip" onclick="onSessionChipClick()"></div>
   </div>
   <div class="tabs" id="tabs"></div>
@@ -800,6 +801,10 @@ function openReportsModal(){
   `);
 }
 
+function batchNumber(b){
+  const m = String(b || '').match(/\d+/);
+  return m ? Number(m[0]) : '';
+}
 function exportMeetupParticipants(meetupId){
   const mt = state.meetups.find(m => m.id === meetupId);
   if(!mt) return;
@@ -812,8 +817,9 @@ function exportMeetupParticipants(meetupId){
       '일시': `${mt.date} ${mt.time}`,
       '장소': mt.location,
       'No.': i + 1,
-      '기수': m ? (m.batch || '') : '',
+      '기수': m ? batchNumber(m.batch) : '',
       '이름': m ? m.name : '(탈퇴회원)',
+      '직함': m ? (m.title || '') : '',
       '연락처': m ? maskPhone(m.phone) : '',
       '소그룹': p.subgroup || '',
       '상세정보(직장·직종 등)': m ? (m.intro || '') : '',
@@ -821,7 +827,7 @@ function exportMeetupParticipants(meetupId){
     };
   });
   const ws = XLSX.utils.json_to_sheet(rows);
-  ws['!cols'] = [{wch:20},{wch:16},{wch:16},{wch:5},{wch:8},{wch:10},{wch:14},{wch:16},{wch:26},{wch:8}];
+  ws['!cols'] = [{wch:20},{wch:16},{wch:16},{wch:5},{wch:8},{wch:10},{wch:14},{wch:14},{wch:16},{wch:26},{wch:8}];
   const wb = XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(wb, ws, '참가자명단');
   XLSX.writeFile(wb, `${mt.title}_참가자명단.xlsx`);
@@ -856,7 +862,8 @@ function exportYearlyReport(){
 
   const memberRows = state.members.map(m => ({
     '이름': m.name,
-    '기수': m.batch || '',
+    '기수': batchNumber(m.batch),
+    '직함': m.title || '',
     '연락처': maskPhone(m.phone),
     '설명': m.intro || '',
     '가입일': m.joinedAt,
@@ -1020,8 +1027,10 @@ function saveEditedMeetup(id){
   const subgroup = document.getElementById('editMtSubgroup').value.trim();
   const info = document.getElementById('editMtInfo').value.trim();
   if(!title || !date || !time || !location){ showToast('모임 이름 · 일시 · 장소는 꼭 입력해주세요'); return; }
+  const dateTimeChanged = (mt.date !== date || mt.time !== time);
   mt.title = title; mt.date = date; mt.time = time; mt.location = location; mt.capacity = capacity;
   mt.mapUrl = mapUrl; mt.subgroups = subgroup.split('\n').map(s=>s.trim()).filter(Boolean); mt.info = info; mt.image = pendingPostImage; mt.requiredTier = requiredTier;
+  if(dateTimeChanged) mt.rescheduledAt = Date.now();
   if(capacity > 0){
     const confirmed = mt.participants.filter(p => p.status === 'confirmed').sort((a,b)=>a.appliedAt-b.appliedAt);
     confirmed.forEach((p, i) => { p.status = i < capacity ? 'confirmed' : 'waiting'; });
@@ -1068,7 +1077,7 @@ function joinMeetup(id, subgroup){
   if(!meetsTier(mt, me)){ showToast(`이 모임은 "${TIER_LABEL[mt.requiredTier]} 이상"만 신청할 수 있어요`); return; }
   if(mt.participants.some(p => p.memberId === me.id)){ showToast('이미 신청했어요'); return; }
   const full = mt.capacity > 0 && confirmedCount(mt) >= mt.capacity;
-  mt.participants.push({ memberId: me.id, status: full ? 'waiting' : 'confirmed', appliedAt: Date.now(), wasWaiting: full, notifiedPromotion: true, subgroup: subgroup || null, attended: false });
+  mt.participants.push({ memberId: me.id, status: full ? 'waiting' : 'confirmed', appliedAt: Date.now(), wasWaiting: full, notifiedPromotion: true, subgroup: subgroup || null, attended: false, weekReminderShown: false });
   saveMeetups();
   closeModal();
   showToast(full ? '정원이 가득 차 대기로 신청됐어요' : '신청 완료! 그날 뵈어요');
@@ -1552,6 +1561,7 @@ function renderSessionChip(){
     chip.innerHTML = `로그인/회원가입`;
   }
   renderAdminBell();
+  renderMemberBell();
 }
 function getAdminLastSeen(){
   const v = localStorage.getItem('rc_admin_lastSeen');
@@ -1604,6 +1614,64 @@ function openAdminNotificationsModal(){
   `, true);
   localStorage.setItem('rc_admin_lastSeen', String(Date.now()));
   renderAdminBell();
+}
+function getMemberLastSeen(){
+  const v = localStorage.getItem('rc_member_lastSeen');
+  return v ? Number(v) : Date.now(); // 가입 전 과거 내역까지 한꺼번에 뜨지 않도록, 처음엔 현재시각 기준
+}
+function collectMemberNotifications(){
+  const me = currentMember();
+  if(!me) return { newMeetups: [], newPosts: [], rescheduled: [], upcoming: [] };
+  const since = getMemberLastSeen();
+  const newMeetups = state.meetups.filter(mt => mt.status === 'approved' && mt.createdAt > since);
+  const newPosts = state.posts.filter(p => p.createdAt > since);
+  const myMeetupIds = new Set(state.meetups.filter(mt => mt.participants.some(p => p.memberId === me.id && p.status === 'confirmed')).map(mt => mt.id));
+  const rescheduled = state.meetups.filter(mt => myMeetupIds.has(mt.id) && mt.rescheduledAt && mt.rescheduledAt > since);
+  const todayStr = ymd(new Date());
+  const upcoming = [];
+  state.meetups.forEach(mt => {
+    const p = mt.participants.find(x => x.memberId === me.id && x.status === 'confirmed');
+    if(!p || p.weekReminderShown) return;
+    const days = Math.floor((new Date(mt.date) - new Date(todayStr)) / 86400000);
+    if(days >= 0 && days <= 7) upcoming.push(mt);
+  });
+  return { newMeetups, newPosts, rescheduled, upcoming };
+}
+function renderMemberBell(){
+  const el = document.getElementById('memberBell');
+  if(!el) return;
+  const me = currentMember();
+  if(!me || isAdmin()){ el.innerHTML = ''; return; } // 관리자는 별도 관리자 알림벨을 씀
+  const { newMeetups, newPosts, rescheduled, upcoming } = collectMemberNotifications();
+  const total = newMeetups.length + newPosts.length + rescheduled.length + upcoming.length;
+  el.innerHTML = `
+    <div class="admin-bell" onclick="openMemberNotificationsModal()">
+      🔔${total > 0 ? `<span class="badge-count">${total > 99 ? '99+' : total}</span>` : ''}
+    </div>
+  `;
+}
+function openMemberNotificationsModal(){
+  const { newMeetups, newPosts, rescheduled, upcoming } = collectMemberNotifications();
+  const section = (title, items, renderItem) => items.length ? `
+    <div class="section-title">${title} (${items.length})</div>
+    ${items.map(renderItem).join('')}
+  ` : '';
+  openModal('알림', `
+    ${(newMeetups.length+newPosts.length+rescheduled.length+upcoming.length)===0 ? '<div class="empty">새로운 알림이 없어요</div>' : ''}
+    ${section('새 모임', newMeetups, mt => `<div class="req-row" style="cursor:pointer;" onclick="closeModal(); openMeetupDetailModal('${mt.id}')"><span class="req-name">${mt.title}</span><span class="req-sub">${fmtDateKR(mt.date)}</span></div>`)}
+    ${section('새 소식', newPosts, p => `<div class="req-row" style="cursor:pointer;" onclick="closeModal(); openPostDetailModal('${p.id}')"><span class="req-name">${p.title||'(제목없음)'}</span><span class="req-sub">${fmtTimeAgo(p.createdAt)}</span></div>`)}
+    ${section('일정 변경 (참가중인 모임)', rescheduled, mt => `<div class="req-row" style="cursor:pointer;" onclick="closeModal(); openMeetupDetailModal('${mt.id}')"><span class="req-name">${mt.title}</span><span class="req-sub">${fmtDateKR(mt.date)} ${mt.time}로 변경됨</span></div>`)}
+    ${section('다가오는 모임 (7일 이내)', upcoming, mt => `<div class="req-row" style="cursor:pointer;" onclick="closeModal(); openMeetupDetailModal('${mt.id}')"><span class="req-name">${mt.title}</span><span class="req-sub">${fmtDateKR(mt.date)}</span></div>`)}
+  `, true);
+  localStorage.setItem('rc_member_lastSeen', String(Date.now()));
+  const me = currentMember();
+  let changed = false;
+  upcoming.forEach(mt => {
+    const p = mt.participants.find(x => x.memberId === me.id);
+    if(p){ p.weekReminderShown = true; changed = true; }
+  });
+  if(changed) saveMeetups();
+  renderMemberBell();
 }
 function onSessionChipClick(){
   if(currentMember()) state.tab = 'mypage';
