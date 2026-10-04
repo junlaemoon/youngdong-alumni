@@ -384,6 +384,7 @@ const TIER_LABEL = { office: '총동문회 사무국', officer: '모임 임원',
 const TIER_RANK = { member: 1, officer: 2, office: 3 };
 function memberTier(m){ return (m && m.tier) || 'member'; }
 function meetsTier(mt, me){
+  if(me && me.role === 'admin') return true; // 플랫폼관리자는 등급 제한 없이 모든 모임에 접근 가능
   const need = TIER_RANK[mt.requiredTier || 'member'] || 1;
   return TIER_RANK[memberTier(me)] >= need;
 }
