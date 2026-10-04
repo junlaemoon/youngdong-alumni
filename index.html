@@ -456,28 +456,6 @@ async function loadCollection(name, orderByField, limitN){
   return arr;
 }
 
-// 회원 목록(가장 큰 읽기 비용)은 버전이 바뀌지 않았으면 브라우저 캐시를 그대로 씀 (읽기 1건으로 절감)
-async function loadMembersWithCache(){
-  try{
-    const verSnap = await db.collection('meta').doc('dataVersion').get();
-    const serverVer = verSnap.exists ? (verSnap.data().members || 0) : 0;
-    const cachedRaw = localStorage.getItem('rc_members_cache');
-    if(cachedRaw){
-      const cached = JSON.parse(cachedRaw);
-      if(cached.ver === serverVer && Array.isArray(cached.data)){
-        cached.data.forEach(m => { fsCache.members[m.id] = JSON.parse(JSON.stringify(m)); });
-        return cached.data;
-      }
-    }
-    const fresh = await loadCollection('members');
-    try{ localStorage.setItem('rc_members_cache', JSON.stringify({ ver: serverVer, data: fresh })); }catch(e){ /* 저장공간 초과 등은 무시 */ }
-    return fresh;
-  }catch(e){
-    console.error(e);
-    return await loadCollection('members'); // 캐시 로직 실패 시 안전하게 폴백
-  }
-}
-
 // 옛 데이터가 쌓여도 읽기량이 계속 늘지 않도록, 최근 항목만 우선 불러옴 (과거 데이터는 삭제되지 않고 Firestore에 그대로 보존됨)
 const NOTICE_LOAD_LIMIT = 150;
 const MEETUP_LOAD_LIMIT = 300;
@@ -499,17 +477,10 @@ async function syncCollection(name, arr){
   });
   remaining.forEach(id => { batch.delete(col.doc(id)); ops++; });
   if(ops > 0) await batch.commit();
-  fsCache[name] = {};
-  arr.forEach(item => { fsCache[name][item.id] = JSON.parse(JSON.stringify(item)); });
+  // 주의: 실시간 리스너가 이 쓰기 결과를 다시 받아 state.X/fsCache를 갱신하므로, 여기서 fsCache를 직접 덮어쓰지 않음
 }
 
-async function saveMembers(){
-  try{
-    await syncCollection('members', state.members);
-    db.collection('meta').doc('dataVersion').set({ members: firebase.firestore.FieldValue.increment(1) }, { merge: true }).catch(()=>{});
-    localStorage.removeItem('rc_members_cache'); // 이 브라우저도 다음 로드에 최신값을 다시 받게 함
-  }catch(e){ console.error(e); showToast('저장 실패, 다시 시도해주세요'); }
-}
+async function saveMembers(){ try{ await syncCollection('members', state.members); }catch(e){ console.error(e); showToast('저장 실패, 다시 시도해주세요'); } }
 async function saveNotices(){ try{ await syncCollection('notices', state.notices); }catch(e){ console.error(e); showToast('저장 실패, 다시 시도해주세요'); } }
 async function saveMeetups(){ try{ await syncCollection('meetups', state.meetups); }catch(e){ console.error(e); showToast('저장 실패, 다시 시도해주세요'); } }
 async function saveRequests(){ try{ await syncCollection('requests', state.requests); }catch(e){ console.error(e); showToast('저장 실패, 다시 시도해주세요'); } }
@@ -524,19 +495,73 @@ function saveSession(){
   }catch(e){ /* 세션 저장 실패는 조용히 무시 */ }
 }
 
+// 새로고침 없이도 자동으로 최신 상태가 반영되도록, 1회성 조회 대신 실시간 리스너를 씀.
+// 리스너는 누군가 데이터를 추가/수정/삭제하는 순간 모든 접속자의 화면에 자동 반영됨.
+function attachLiveCollection(name, orderByField, limitN, onUpdate){
+  let ref = db.collection(name);
+  if(orderByField) ref = ref.orderBy(orderByField, 'desc');
+  if(limitN) ref = ref.limit(limitN);
+  return ref.onSnapshot(snap => {
+    const arr = [];
+    fsCache[name] = {};
+    snap.forEach(doc => {
+      const data = { id: doc.id, ...doc.data() };
+      arr.push(data);
+      fsCache[name][doc.id] = JSON.parse(JSON.stringify(data));
+    });
+    onUpdate(arr);
+  }, err => {
+    console.error(`[live:${name}]`, err);
+  });
+}
+
 async function init(){
-  try{
-    [state.members, state.notices, state.meetups, state.requests, state.posts] = await Promise.all([
-      loadMembersWithCache(),
-      loadCollection('notices', 'date', NOTICE_LOAD_LIMIT),
-      loadCollection('meetups', 'createdAt', MEETUP_LOAD_LIMIT),
-      loadCollection('requests'),
-      loadCollection('posts', 'createdAt', POST_LOAD_LIMIT),
-    ]);
-  }catch(e){
-    console.error(e);
-    showToast('데이터를 불러오지 못했어요. 새로고침 해주세요.');
+  const ready = { members:false, notices:false, meetups:false, requests:false, posts:false };
+  function runFirstTimeSetupIfReady(){
+    if(state.loaded) return;
+    if(!Object.values(ready).every(Boolean)) return;
+
+    try{
+      const raw = localStorage.getItem('rc_session');
+      const sess = raw ? JSON.parse(raw) : null;
+      if(sess && state.members.some(m => m.id === sess.memberId)) state.session = sess;
+    }catch(e){ /* 세션 복원 실패는 무시 */ }
+
+    // 예전(작성자 실시간연동 도입 전) 공지에 authorId 소급 연결
+    let migrated = false;
+    state.notices.forEach(n => {
+      if(!n.authorId){
+        const m = state.members.find(x => x.name === n.author);
+        if(m){ n.authorId = m.id; migrated = true; }
+      }
+    });
+    if(migrated) saveNotices();
+
+    state.loaded = true;
+    if(state.session) checkMyPromotions();
+    renderAll();
   }
+
+  attachLiveCollection('members', null, null, (arr) => {
+    state.members = arr; ready.members = true;
+    if(state.loaded) renderAll(); else runFirstTimeSetupIfReady();
+  });
+  attachLiveCollection('notices', 'date', NOTICE_LOAD_LIMIT, (arr) => {
+    state.notices = arr; ready.notices = true;
+    if(state.loaded) renderApp(); else runFirstTimeSetupIfReady();
+  });
+  attachLiveCollection('meetups', 'createdAt', MEETUP_LOAD_LIMIT, (arr) => {
+    state.meetups = arr; ready.meetups = true;
+    if(state.loaded) renderApp(); else runFirstTimeSetupIfReady();
+  });
+  attachLiveCollection('requests', null, null, (arr) => {
+    state.requests = arr; ready.requests = true;
+    if(state.loaded) renderApp(); else runFirstTimeSetupIfReady();
+  });
+  attachLiveCollection('posts', 'createdAt', POST_LOAD_LIMIT, (arr) => {
+    state.posts = arr; ready.posts = true;
+    if(state.loaded) renderApp(); else runFirstTimeSetupIfReady();
+  });
 
   try{
     const snap = await db.collection('activityLog').orderBy('at','desc').limit(50).get();
@@ -549,26 +574,6 @@ async function init(){
     const metaSnap = await db.collection('meta').doc('backup').get();
     state.lastBackupAt = metaSnap.exists ? metaSnap.data().lastBackupAt : null;
   }catch(e){ state.lastBackupAt = null; }
-
-  try{
-    const raw = localStorage.getItem('rc_session');
-    const sess = raw ? JSON.parse(raw) : null;
-    if(sess && state.members.some(m => m.id === sess.memberId)) state.session = sess;
-  }catch(e){ /* 세션 복원 실패는 무시 */ }
-
-  // 예전(작성자 실시간연동 도입 전) 공지에 authorId 소급 연결
-  let migrated = false;
-  state.notices.forEach(n => {
-    if(!n.authorId){
-      const m = state.members.find(x => x.name === n.author);
-      if(m){ n.authorId = m.id; migrated = true; }
-    }
-  });
-  if(migrated) saveNotices();
-
-  state.loaded = true;
-  if(state.session) checkMyPromotions();
-  renderAll();
 }
 
 /* ---------------------------------------------------------
@@ -614,7 +619,7 @@ async function doRegister(name, intro, batch, phone, pin, hint){
     showToast('가입 처리 중 오류가 발생했어요. 다시 시도해주세요');
     return;
   }
-  state.members.push(member);
+  state.members.push(member); // 실시간 리스너가 곧 다시 채워주지만, 가입한 본인 화면엔 즉시 보이도록 선반영
   fsCache.members[member.id] = JSON.parse(JSON.stringify(member));
   state.session = { memberId: member.id };
   saveSession();
