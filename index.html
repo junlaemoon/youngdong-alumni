@@ -1482,10 +1482,12 @@ function participantsSectionHtml(mt){
     </div>` : '';
 
   const exportBtn = admin ? `<button class="btn btn-ghost btn-block" onclick="exportMeetupParticipants('${mt.id}')">⬇ 참가자 명단 엑셀로 내보내기</button>` : '';
+  const inviteBtn = admin ? `<button class="btn btn-accent btn-block" onclick="openInviteModal('${mt.id}')">➕ 회원 초대하기</button>` : '';
 
   return `
     ${adminCodeHtml}
     ${checkinHtml}
+    ${inviteBtn}
     ${exportBtn}
     <div class="section-title">확정 (${confirmed.length}${mt.capacity>0 ? '/'+mt.capacity : ''})</div>
     ${confirmed.length ? `<div class="p-table-head"><span class="col-name">이름</span><span class="col-sub">소그룹</span><span class="col-att">출석</span></div>` + confirmed.map(rowHtml).join('') : '<p class="helper">아직 신청자가 없어요</p>'}
@@ -1496,6 +1498,57 @@ function openParticipantsModal(id){
   const mt = state.meetups.find(m => m.id === id);
   if(!mt) return;
   openModal(mt.title, `<p class="helper">${fmtDateKR(mt.date)} ${mt.time} · ${mt.location}</p>${participantsSectionHtml(mt)}`, true);
+}
+function openInviteModal(meetupId, query){
+  if(!isAdmin()) return;
+  const mt = state.meetups.find(m => m.id === meetupId);
+  if(!mt) return;
+  const q = (query || '').trim().toLowerCase();
+  const already = new Set(mt.participants.map(p => p.memberId));
+  let candidates = state.members.filter(m => !already.has(m.id));
+  if(q) candidates = candidates.filter(m => m.name.toLowerCase().includes(q) || (m.batch||'').toLowerCase().includes(q));
+  const groups = getSubgroups(mt);
+  const groupSelect = groups.length ? `
+    <div class="field"><label>소그룹 지정 (선택)</label>
+      <select id="inviteSubgroup">
+        <option value="">선택 안 함</option>
+        ${groups.map(g => `<option value="${g.replace(/"/g,'&quot;')}">${g}</option>`).join('')}
+      </select>
+    </div>` : '';
+  openModal('회원 초대', `
+    <p class="helper">참석 등급이나 모임 신청 권한과 상관없이, 선택한 동문을 바로 "확정" 상태로 추가해요.</p>
+    ${groupSelect}
+    <div class="field"><input id="inviteSearchInput" placeholder="🔍 이름·기수 검색" value="${query||''}" oninput="openInviteModal('${meetupId}', this.value)"></div>
+    <div class="card" style="padding:4px 16px; max-height:320px; overflow-y:auto;">
+      ${candidates.length === 0 ? '<p class="helper" style="padding:10px 0;">초대할 수 있는 동문이 없어요</p>' : candidates.map(m => `
+        <div class="req-row">
+          <span class="req-name">${m.name}${m.batch ? ' · '+displayBatch(m.batch) : ''}</span>
+          <button class="btn btn-accent btn-sm" onclick="inviteMember('${meetupId}', '${m.id}')">초대</button>
+        </div>
+      `).join('')}
+    </div>
+  `, true);
+  // 검색 입력 중 모달이 다시 그려져도 포커스가 유지되도록
+  setTimeout(() => {
+    const el = document.getElementById('inviteSearchInput');
+    if(el){ el.focus(); el.selectionStart = el.selectionEnd = el.value.length; }
+  }, 0);
+}
+function inviteMember(meetupId, memberId){
+  const mt = state.meetups.find(m => m.id === meetupId);
+  const m = state.members.find(x => x.id === memberId);
+  if(!mt || !m) return;
+  if(mt.participants.some(p => p.memberId === memberId)){ showToast('이미 참가자예요'); return; }
+  const subgroupEl = document.getElementById('inviteSubgroup');
+  const subgroup = subgroupEl && subgroupEl.value ? subgroupEl.value : null;
+  mt.participants.push({
+    memberId, status: 'confirmed', appliedAt: Date.now(), wasWaiting: false, notifiedPromotion: true,
+    subgroup, attended: false, weekReminderShown: false, invitedBy: currentMember() ? currentMember().id : null,
+  });
+  saveMeetups();
+  logActivity('회원 초대', `${mt.title} · ${m.name}`);
+  showToast(`${m.name}님을 초대했어요`);
+  openInviteModal(meetupId); // 목록 갱신하며 계속 초대할 수 있게 모달 유지
 }
 function openMemberProfileModal(memberId){
   const m = state.members.find(x => x.id === memberId);
