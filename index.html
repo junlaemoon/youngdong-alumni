@@ -908,7 +908,7 @@ function openEditNoticeModal(id){
   if(!n) return;
   openModal('공지 수정', `
     <div class="field"><label>제목</label><input id="editNoticeTitle" value="${n.title.replace(/"/g,'&quot;')}"></div>
-    <div class="field"><label>내용</label><textarea id="editNoticeContent">${n.content}</textarea></div>
+    <div class="field"><label>내용</label><textarea id="editNoticeContent" class="tall">${n.content}</textarea></div>
     <button class="btn btn-accent btn-block" onclick="saveEditedNotice('${id}')">저장</button>
   `);
 }
@@ -1087,7 +1087,9 @@ function joinMeetup(id, subgroup){
   const mt = state.meetups.find(m => m.id === id);
   if(!mt) return;
   if(!meetsTier(mt, me)){ showToast(`이 모임은 "${TIER_LABEL[mt.requiredTier]} 이상"만 신청할 수 있어요`); return; }
-  if(mt.participants.some(p => p.memberId === me.id)){ showToast('이미 신청했어요'); return; }
+  const existing = mt.participants.find(p => p.memberId === me.id);
+  if(existing && existing.status === 'invited'){ showToast('초대를 받으셨어요. 아래 "수락"을 눌러주세요'); return; }
+  if(existing){ showToast('이미 신청했어요'); return; }
   const full = mt.capacity > 0 && confirmedCount(mt) >= mt.capacity;
   mt.participants.push({ memberId: me.id, status: full ? 'waiting' : 'confirmed', appliedAt: Date.now(), wasWaiting: full, notifiedPromotion: true, subgroup: subgroup || null, attended: false, weekReminderShown: false });
   saveMeetups();
@@ -1404,7 +1406,7 @@ function openNoticeModal(){
   if(!requireWritePermission('notice')) return;
   openModal('공지 작성', `
     <div class="field"><label>제목</label><input id="noticeTitle" placeholder="예: 2026년 정기총회 안내"></div>
-    <div class="field"><label>내용</label><textarea id="noticeContent" placeholder="공지 내용을 적어주세요"></textarea></div>
+    <div class="field"><label>내용</label><textarea id="noticeContent" class="tall" placeholder="공지 내용을 적어주세요"></textarea></div>
     <button class="btn btn-accent btn-block" onclick="addNotice(document.getElementById('noticeTitle').value, document.getElementById('noticeContent').value)">등록</button>
   `);
 }
@@ -1439,6 +1441,7 @@ function participantsSectionHtml(mt){
   if(!mt.attendanceCode){ mt.attendanceCode = String(Math.floor(1000 + Math.random()*9000)); saveMeetups(); }
   const confirmed = mt.participants.filter(p=>p.status==='confirmed');
   const waiting = mt.participants.filter(p=>p.status==='waiting');
+  const invited = mt.participants.filter(p=>p.status==='invited');
   const admin = isAdmin();
   const me = currentMember();
   const winOpen = attendanceWindowOpen(mt);
@@ -1492,6 +1495,7 @@ function participantsSectionHtml(mt){
     <div class="section-title">확정 (${confirmed.length}${mt.capacity>0 ? '/'+mt.capacity : ''})</div>
     ${confirmed.length ? `<div class="p-table-head"><span class="col-name">이름</span><span class="col-sub">소그룹</span><span class="col-att">출석</span></div>` + confirmed.map(rowHtml).join('') : '<p class="helper">아직 신청자가 없어요</p>'}
     ${waiting.length ? `<div class="section-title">대기 (${waiting.length})</div><div class="p-table-head"><span class="col-name">이름</span><span class="col-sub">소그룹</span><span class="col-att">출석</span></div>` + waiting.map(rowHtml).join('') : ''}
+    ${(admin && invited.length) ? `<div class="section-title">초대함 · 응답 대기 (${invited.length})</div><p class="helper">수락 전까지는 신청 명단/인원에 포함되지 않아요.</p>` + invited.map(p => `<div class="req-row"><span class="req-name">${memberDisplayName(p.memberId)}</span><button class="btn btn-ghost btn-sm" onclick="cancelInvite('${mt.id}','${p.memberId}')">초대 취소</button></div>`).join('') : ''}
   `;
 }
 function openParticipantsModal(id){
@@ -1538,17 +1542,52 @@ function inviteMember(meetupId, memberId){
   const mt = state.meetups.find(m => m.id === meetupId);
   const m = state.members.find(x => x.id === memberId);
   if(!mt || !m) return;
-  if(mt.participants.some(p => p.memberId === memberId)){ showToast('이미 참가자예요'); return; }
+  if(mt.participants.some(p => p.memberId === memberId)){ showToast('이미 참가자(또는 초대 대기중)예요'); return; }
   const subgroupEl = document.getElementById('inviteSubgroup');
   const subgroup = subgroupEl && subgroupEl.value ? subgroupEl.value : null;
   mt.participants.push({
-    memberId, status: 'confirmed', appliedAt: Date.now(), wasWaiting: false, notifiedPromotion: true,
+    memberId, status: 'invited', appliedAt: Date.now(), wasWaiting: false, notifiedPromotion: true,
     subgroup, attended: false, weekReminderShown: false, invitedBy: currentMember() ? currentMember().id : null,
   });
   saveMeetups();
   logActivity('회원 초대', `${mt.title} · ${m.name}`);
-  showToast(`${m.name}님을 초대했어요`);
+  showToast(`${m.name}님에게 초대를 보냈어요 (수락 전까지는 신청 명단에 안 보여요)`);
   openInviteModal(meetupId); // 목록 갱신하며 계속 초대할 수 있게 모달 유지
+}
+function acceptInvite(meetupId){
+  const me = currentMember();
+  const mt = state.meetups.find(m => m.id === meetupId);
+  if(!me || !mt) return;
+  const p = mt.participants.find(x => x.memberId === me.id && x.status === 'invited');
+  if(!p) return;
+  const full = mt.capacity > 0 && confirmedCount(mt) >= mt.capacity;
+  p.status = full ? 'waiting' : 'confirmed';
+  p.wasWaiting = full;
+  p.notifiedPromotion = true;
+  p.appliedAt = Date.now();
+  saveMeetups();
+  closeModal();
+  showToast(full ? '정원이 가득 차 대기로 등록됐어요' : '초대를 수락했어요! 그날 뵈어요');
+  renderAll();
+}
+function cancelInvite(meetupId, memberId){
+  if(!isAdmin()) return;
+  const mt = state.meetups.find(m => m.id === meetupId);
+  if(!mt) return;
+  mt.participants = mt.participants.filter(p => !(p.memberId === memberId && p.status === 'invited'));
+  saveMeetups();
+  showToast('초대를 취소했어요');
+  openParticipantsModal(meetupId);
+}
+function declineInvite(meetupId){
+  const me = currentMember();
+  const mt = state.meetups.find(m => m.id === meetupId);
+  if(!me || !mt) return;
+  mt.participants = mt.participants.filter(p => !(p.memberId === me.id && p.status === 'invited'));
+  saveMeetups();
+  closeModal();
+  showToast('초대를 거절했어요');
+  renderAll();
 }
 function openMemberProfileModal(memberId){
   const m = state.members.find(x => x.id === memberId);
@@ -1645,7 +1684,7 @@ function collectNewItems(){
   const newParticipants = [];
   state.meetups.forEach(mt => {
     mt.participants.forEach(p => {
-      if(p.appliedAt > since) newParticipants.push({ meetupTitle: mt.title, memberId: p.memberId, appliedAt: p.appliedAt });
+      if(p.status !== 'invited' && p.appliedAt > since) newParticipants.push({ meetupTitle: mt.title, memberId: p.memberId, appliedAt: p.appliedAt });
     });
   });
   newParticipants.sort((a,b) => b.appliedAt - a.appliedAt);
@@ -1686,7 +1725,7 @@ function getMemberLastSeen(){
 }
 function collectMemberNotifications(){
   const me = currentMember();
-  if(!me) return { newMeetups: [], newPosts: [], rescheduled: [], upcoming: [] };
+  if(!me) return { newMeetups: [], newPosts: [], rescheduled: [], upcoming: [], invites: [] };
   const since = getMemberLastSeen();
   const newMeetups = state.meetups.filter(mt => mt.status === 'approved' && mt.createdAt > since);
   const newPosts = state.posts.filter(p => p.createdAt > since);
@@ -1700,15 +1739,16 @@ function collectMemberNotifications(){
     const days = Math.floor((new Date(mt.date) - new Date(todayStr)) / 86400000);
     if(days >= 0 && days <= 7) upcoming.push(mt);
   });
-  return { newMeetups, newPosts, rescheduled, upcoming };
+  const invites = state.meetups.filter(mt => mt.participants.some(p => p.memberId === me.id && p.status === 'invited'));
+  return { newMeetups, newPosts, rescheduled, upcoming, invites };
 }
 function renderMemberBell(){
   const el = document.getElementById('memberBell');
   if(!el) return;
   const me = currentMember();
   if(!me || isAdmin()){ el.innerHTML = ''; return; } // 관리자는 별도 관리자 알림벨을 씀
-  const { newMeetups, newPosts, rescheduled, upcoming } = collectMemberNotifications();
-  const total = newMeetups.length + newPosts.length + rescheduled.length + upcoming.length;
+  const { newMeetups, newPosts, rescheduled, upcoming, invites } = collectMemberNotifications();
+  const total = newMeetups.length + newPosts.length + rescheduled.length + upcoming.length + invites.length;
   el.innerHTML = `
     <div class="admin-bell" onclick="openMemberNotificationsModal()">
       🔔${total > 0 ? `<span class="badge-count">${total > 99 ? '99+' : total}</span>` : ''}
@@ -1716,13 +1756,14 @@ function renderMemberBell(){
   `;
 }
 function openMemberNotificationsModal(){
-  const { newMeetups, newPosts, rescheduled, upcoming } = collectMemberNotifications();
+  const { newMeetups, newPosts, rescheduled, upcoming, invites } = collectMemberNotifications();
   const section = (title, items, renderItem) => items.length ? `
     <div class="section-title">${title} (${items.length})</div>
     ${items.map(renderItem).join('')}
   ` : '';
   openModal('알림', `
-    ${(newMeetups.length+newPosts.length+rescheduled.length+upcoming.length)===0 ? '<div class="empty">새로운 알림이 없어요</div>' : ''}
+    ${(newMeetups.length+newPosts.length+rescheduled.length+upcoming.length+invites.length)===0 ? '<div class="empty">새로운 알림이 없어요</div>' : ''}
+    ${section('받은 모임 초대', invites, mt => `<div class="req-row" style="cursor:pointer;" onclick="closeModal(); openMeetupDetailModal('${mt.id}')"><span class="req-name">📩 ${mt.title}</span><span class="req-sub">${fmtDateKR(mt.date)} · 수락/거절하기</span></div>`)}
     ${section('새 모임', newMeetups, mt => `<div class="req-row" style="cursor:pointer;" onclick="closeModal(); openMeetupDetailModal('${mt.id}')"><span class="req-name">${mt.title}</span><span class="req-sub">${fmtDateKR(mt.date)}</span></div>`)}
     ${section('새 소식', newPosts, p => `<div class="req-row" style="cursor:pointer;" onclick="closeModal(); openPostDetailModal('${p.id}')"><span class="req-name">${p.title||'(제목없음)'}</span><span class="req-sub">${fmtTimeAgo(p.createdAt)}</span></div>`)}
     ${section('일정 변경 (참가중인 모임)', rescheduled, mt => `<div class="req-row" style="cursor:pointer;" onclick="closeModal(); openMeetupDetailModal('${mt.id}')"><span class="req-name">${mt.title}</span><span class="req-sub">${fmtDateKR(mt.date)} ${mt.time}로 변경됨</span></div>`)}
@@ -1960,7 +2001,8 @@ function meetupCard(mt){
     }
   } else if(!isPast){
     const eligible = !currentMember() || meetsTier(mt, currentMember());
-    if(myStatus === 'confirmed') actions = `<button class="btn btn-coral btn-sm" onclick="cancelMeetup('${mt.id}')">신청 취소</button>`;
+    if(myStatus === 'invited') actions = `<span class="helper" style="margin:0;">📩 초대받았어요</span><button class="btn btn-accent btn-sm" onclick="acceptInvite('${mt.id}')">수락</button><button class="btn btn-ghost btn-sm" onclick="declineInvite('${mt.id}')">거절</button>`;
+    else if(myStatus === 'confirmed') actions = `<button class="btn btn-coral btn-sm" onclick="cancelMeetup('${mt.id}')">신청 취소</button>`;
     else if(myStatus === 'waiting') actions = `<button class="btn btn-ghost btn-sm" disabled>대기중</button><button class="btn btn-coral btn-sm" onclick="cancelMeetup('${mt.id}')">취소</button>`;
     else if(!eligible) actions = `<span class="helper" style="margin:0;">"${TIER_LABEL[mt.requiredTier]} 이상"만 신청 가능해요</span>`;
     else if(groups.length) actions = `<button class="btn btn-accent btn-sm" onclick="openJoinModal('${mt.id}')">${full ? '대기 신청' : '참여 신청'}</button>`;
@@ -2210,7 +2252,10 @@ function renderMyTab(){
   const accepted = others.filter(m => contactStateWith(m.id).state === 'accepted');
   const browsable = others.filter(m => !accepted.some(a=>a.id===m.id));
   const myMeetups = state.meetups
-    .filter(mt => mt.participants.some(p => p.memberId === me.id))
+    .filter(mt => mt.participants.some(p => p.memberId === me.id && p.status !== 'invited'))
+    .sort((a,b) => (a.date+a.time).localeCompare(b.date+b.time));
+  const myInvites = state.meetups
+    .filter(mt => mt.participants.some(p => p.memberId === me.id && p.status === 'invited'))
     .sort((a,b) => (a.date+a.time).localeCompare(b.date+b.time));
 
   return `
@@ -2225,6 +2270,21 @@ function renderMyTab(){
     </div>
     <button class="btn btn-ghost btn-block" onclick="openEditProfileModal()">내 정보 수정</button>
     <button class="btn btn-ghost btn-block" style="margin-top:8px;" onclick="doLogout()">로그아웃</button>
+
+    ${myInvites.length ? `
+      <div class="section-title">받은 모임 초대 (${myInvites.length})</div>
+      <div class="card" style="padding:4px 16px;">
+        ${myInvites.map(mt => `
+          <div class="req-row" style="flex-wrap:wrap; gap:8px;">
+            <span style="cursor:pointer;" onclick="openMeetupDetailModal('${mt.id}')"><span class="req-name">${mt.title}</span><br><span class="req-sub">${fmtDateKR(mt.date)} · ${mt.time} · ${mt.location}</span></span>
+            <span class="member-actions" style="margin-top:0;">
+              <button class="btn btn-accent btn-sm" onclick="acceptInvite('${mt.id}')">수락</button>
+              <button class="btn btn-ghost btn-sm" onclick="declineInvite('${mt.id}')">거절</button>
+            </span>
+          </div>
+        `).join('')}
+      </div>
+    ` : ''}
 
     ${myMeetups.length ? `
       <div class="section-title">내가 신청한 모임 (${myMeetups.length})</div>
