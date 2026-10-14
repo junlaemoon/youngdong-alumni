@@ -2443,13 +2443,14 @@ function renderApp(){
   else app.innerHTML = renderMyTab();
 }
 
-function noticeCardFull(n){
+function noticeCardFull(n, inList){
   const admin = isAdmin();
   return `
     <div class="card">
       <h3>${n.pinned ? '📌 ' : ''}${n.title}</h3>
       <p class="meetup-meta" style="margin:2px 0 8px;">${memberDisplayName(n.authorId, n.author)} · ${n.date}${n.editedAt ? ' · 수정됨' : ''}</p>
       ${richView(n)}
+      ${inList ? `<button class="btn btn-ghost btn-block" style="margin-top:12px;" onclick="openNoticeDetailModal('${n.id}')">💬 댓글 보기 · 쓰기</button>` : ''}
       ${(admin || hasPerm('notice')) ? `<div style="margin-top:10px; display:flex; gap:8px; flex-wrap:wrap;"><button class="btn btn-ghost btn-sm" onclick="togglePinNotice('${n.id}')">${n.pinned ? '📌 고정 해제' : '📌 상단 고정'}</button>${admin ? `<button class="btn btn-ghost btn-sm" onclick="openEditNoticeModal('${n.id}')">수정</button><button class="btn btn-coral btn-sm" onclick="deleteNotice('${n.id}')">삭제</button>` : ''}</div>` : ''}
     </div>
   `;
@@ -2493,7 +2494,7 @@ function renderNoticeList(){
   const list = q ? all.filter(n => n.title.toLowerCase().includes(q) || itemPlain(n).toLowerCase().includes(q)) : all;
   if(list.length === 0) return q ? `<div class="empty">검색 결과가 없어요</div>` : `<div class="empty">아직 공지가 없어요</div>`;
   if(q) return list.map(noticeCardCompact).join('');
-  return noticeCardFull(list[0]) + (list.length > 1 ? list.slice(1).map(noticeCardCompact).join('') : '');
+  return noticeCardFull(list[0], true) + (list.length > 1 ? list.slice(1).map(noticeCardCompact).join('') : '');
 }
 function onNoticeSearch(v){
   state.noticeSearch = v;
