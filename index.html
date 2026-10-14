@@ -2365,6 +2365,7 @@ function renderEntryBoxes(nid){
       <tbody>${list.map(e => `<tr><td>${esc(e.category||'')}</td><td>${esc(e.company)}</td><td>${entryClip(e.service)}</td><td>${entryWho(e)}</td><td>${entryClip(e.address)}</td>${admin ? `<td><button class="btn btn-ghost btn-sm" onclick="deleteEntry('${e.id}','${nid}')">삭제</button></td>` : ''}</tr>`).join('')}</tbody>
     </table></div></div>` : '<div class="empty" style="padding:14px 0;">아직 등록된 업체가 없어요. 첫 번째로 등록해보세요!</div>'}
     <button class="btn btn-accent btn-block" style="margin-top:8px;" onclick="openEntryModal('${nid}')">+ 내 업체 등록하기</button>
+    ${admin ? `<button class="btn btn-ghost btn-block" onclick="openEntryImportModal('${nid}')">⬆ 엑셀로 일괄 등록</button>` : ''}
     ${admin && list.length ? `<button class="btn btn-ghost btn-block" onclick="exportEntries('${nid}')">⬇ 등록 명단 엑셀</button>` : ''}
   `;
   document.querySelectorAll(`.entries-box[data-nid="${nid}"]`).forEach(b => { b.innerHTML = html; });
@@ -2372,6 +2373,110 @@ function renderEntryBoxes(nid){
 function entriesBoxHtml(n){
   return n.entriesEnabled ? `<div class="entries-box" data-nid="${n.id}"><p class="helper">불러오는 중…</p></div>` : '';
 }
+/* 엑셀 일괄 등록 (관리자) — 헤더를 자동 인식해서 열을 매핑 */
+function entryColType(h){
+  const t = String(h||'').replace(/\s+/g,'');
+  if(!t) return null;
+  if(/기수.*(성함|이름|성명)|(성함|이름|성명).*기수|동문\/기수|동문.*기수/.test(t)) return 'combo';
+  if(/주소|위치|소재지/.test(t)) return 'address';
+  if(/분류|구분|카테고리/.test(t)) return 'category';
+  if(/상호|업체|사업체|회사|가게|업소/.test(t)) return 'company';
+  if(/서비스|업종|취급|메뉴|품목|내용/.test(t)) return 'service';
+  if(/기수/.test(t)) return 'batch';
+  if(/성함|이름|성명|동문/.test(t)) return 'name';
+  return null;
+}
+function parseEntryRows(aoa){
+  aoa = (aoa || []).map(r => (r || []).map(c => c == null ? '' : String(c)));
+  let hi = -1, map = {};
+  for(let i = 0; i < Math.min(aoa.length, 6); i++){
+    const m = {}; let hits = 0;
+    aoa[i].forEach((h, ci) => { const k = entryColType(h); if(k && m[k] === undefined){ m[k] = ci; hits++; } });
+    if(m.company !== undefined && hits >= 3){ hi = i; map = m; break; }
+  }
+  let note = '헤더를 자동으로 인식했어요';
+  if(hi < 0){ // 헤더가 없으면 기본 순서: 분류, 상호명, 주요서비스, 기수·성함(또는 기수, 성함), 주소
+    hi = -1; note = '헤더를 찾지 못해 기본 열 순서(분류·상호명·주요서비스·기수·성함·주소)로 읽었어요';
+    const w = Math.max(0, ...aoa.map(r => r.length));
+    map = w >= 6 ? { category:0, company:1, service:2, batch:3, name:4, address:5 } : { category:0, company:1, service:2, combo:3, address:4 };
+  }
+  const rows = [];
+  for(let i = hi + 1; i < aoa.length; i++){
+    const r = aoa[i]; const g = k => (map[k] === undefined ? '' : String(r[map[k]] || '').replace(/\r?\n/g, ' ').trim());
+    const company = g('company'); if(!company) continue;
+    let batch = g('batch'), name = g('name');
+    if(map.combo !== undefined){
+      const m = g('combo').match(/^(\d+)\s*회?\s*(.*)$/);
+      if(m){ batch = m[1]; name = m[2].trim(); } else name = g('combo');
+    }
+    batch = String(batch).replace(/[^\d]/g, '');
+    rows.push({ category: g('category'), company, service: g('service'), batch: batch ? Number(batch) : '', name, address: g('address') });
+  }
+  return { rows, note };
+}
+function openEntryImportModal(nid){
+  if(!isAdmin()) return;
+  window._entryImport = { nid, rows: [] };
+  openModal('엑셀로 일괄 등록', `
+    <p class="helper">엑셀(.xlsx) 또는 CSV 파일을 올리면 열 제목(분류·상호명·주요서비스·기수·성함·주소)을 자동으로 찾아요. "24회 권희승"처럼 기수와 성함이 한 칸에 있어도 인식해요. 이미 등록된 같은 상호+주소는 건너뛰어요.</p>
+    <button class="btn btn-ghost btn-block" onclick="downloadEntryTemplate()">⬇ 엑셀 양식 내려받기</button>
+    <label class="file-btn" style="margin-top:10px;">📄 파일 선택<input type="file" accept=".xlsx,.xls,.csv" style="display:none" onchange="handleEntryFile(this)"></label>
+    <div id="entryImportPreview" style="margin-top:12px;"></div>
+  `);
+}
+function downloadEntryTemplate(){
+  const ws = XLSX.utils.aoa_to_sheet([['분류','상호명','주요서비스','기수','성함','주소'],['식당','영동식당','한식, 단체예약',32,'홍길동','서울 강남구 OO로 12']]);
+  ws['!cols'] = [{wch:10},{wch:22},{wch:28},{wch:8},{wch:10},{wch:36}];
+  const wb = XLSX.utils.book_new(); XLSX.utils.book_append_sheet(wb, ws, '업체등록');
+  XLSX.writeFile(wb, '동문업체_일괄등록_양식.xlsx');
+}
+function handleEntryFile(input){
+  const f = input.files && input.files[0]; if(!f) return;
+  const reader = new FileReader();
+  reader.onload = e => {
+    try{
+      const wb = XLSX.read(new Uint8Array(e.target.result), { type: 'array' });
+      const ws = wb.Sheets[wb.SheetNames[0]];
+      const aoa = XLSX.utils.sheet_to_json(ws, { header: 1, defval: '', raw: false });
+      const { rows, note } = parseEntryRows(aoa);
+      const nid = window._entryImport.nid;
+      const exist = new Set((entryStore[nid] || []).map(x => (x.company + '|' + x.address).replace(/\s+/g,'')));
+      const seen = new Set(); const fresh = []; let skipped = 0;
+      rows.forEach(r => { const k = (r.company + '|' + r.address).replace(/\s+/g,''); if(exist.has(k) || seen.has(k)){ skipped++; return; } seen.add(k); fresh.push(r); });
+      window._entryImport.rows = fresh;
+      const box = document.getElementById('entryImportPreview');
+      box.innerHTML = `
+        <p class="helper">${note}. 등록 가능 <b>${fresh.length}건</b>${skipped ? ` · 중복 제외 ${skipped}건` : ''}</p>
+        ${fresh.length ? `<div class="rt-wrap" style="max-height:260px; overflow:auto;"><div class="rt-content"><table class="entry-table" style="min-width:480px;">
+          <thead><tr><th>분류</th><th>상호명</th><th>주요서비스</th><th>기수·성함</th><th>주소</th></tr></thead>
+          <tbody>${fresh.slice(0,100).map(r => `<tr><td>${esc(r.category)}</td><td>${esc(r.company)}</td><td>${esc(r.service)}</td><td>${r.batch ? r.batch + '회 ' : ''}${esc(r.name)}</td><td>${esc(r.address)}</td></tr>`).join('')}</tbody>
+        </table></div></div>${fresh.length > 100 ? `<p class="helper">미리보기는 100건까지만 보여요 (등록은 전체)</p>` : ''}
+        <button class="btn btn-accent btn-block" style="margin-top:10px;" onclick="confirmEntryImport()">${fresh.length}건 등록하기</button>` : '<div class="empty">등록할 새 항목이 없어요</div>'}`;
+    }catch(err){ console.error(err); showToast('파일을 읽지 못했어요. 엑셀(.xlsx)/CSV인지 확인해주세요'); }
+  };
+  reader.readAsArrayBuffer(f);
+}
+async function confirmEntryImport(){
+  if(!isAdmin() || !window._entryImport) return;
+  const { nid, rows } = window._entryImport; const me = currentMember();
+  if(!rows.length) return;
+  try{
+    for(let i = 0; i < rows.length; i += 400){
+      const batch = db.batch(); const now = Date.now();
+      rows.slice(i, i + 400).forEach((r, j) => {
+        const id = uid() + j;
+        batch.set(db.collection('noticeEntries').doc(id), {
+          id, noticeId: nid, category: r.category.slice(0,20), company: r.company.slice(0,100), service: r.service.slice(0,200), address: r.address.slice(0,200),
+          memberId: me.id, name: r.name.slice(0,30), batch: r.batch, byAdmin: true, createdAt: now + i + j,
+        });
+      });
+      await batch.commit();
+    }
+    logActivity('업체 엑셀 일괄 등록', rows.length + '건');
+    closeModal(); showToast(rows.length + '건을 등록했어요');
+  }catch(e){ console.error(e); showToast('등록 실패, 다시 시도해주세요'); }
+}
+
 function toggleEntries(id){
   if(!isAdmin()) return;
   const n = state.notices.find(x => x.id === id); if(!n) return;
