@@ -2184,9 +2184,14 @@ function rtCmd(cmd, val){
 }
 function rtLink(){
   if(!rtFocus()) return;
-  let u = prompt('연결할 주소(URL)를 입력하세요', 'https://'); if(!u) return;
+  const selTxt = String(window.getSelection()).trim();
+  let label = selTxt;
+  if(!label){ label = prompt('링크에 표시할 글자를 입력하세요 (예: 서울시 강남구 OO로 12)', ''); if(!label) return; }
+  let u = prompt('연결할 링크(URL)를 입력하세요', 'https://'); if(!u) return;
   if(!/^(https?:\/\/|mailto:|tel:)/i.test(u)) u = 'https://' + u;
-  document.execCommand('createLink', false, u);
+  rtFocus();
+  if(selTxt) document.execCommand('createLink', false, u);
+  else document.execCommand('insertHTML', false, '<a href="' + esc(u) + '">' + esc(label) + '</a>&nbsp;');
 }
 function rtCell(){
   const n = rtSel && rtSel.startContainer; if(!n) return null;
@@ -2338,14 +2343,32 @@ function startEntriesListeners(){
   });
 }
 const ENTRY_MORE_AT = 20;
-function entryClip(text){
+const MAP_HOST_RE = /^(https?:\/\/)([\w-]+\.)*(naver\.com|naver\.me|kakao\.com|kko\.to|kko\.kakao\.com|goo\.gl|google\.com|google\.co\.kr|maps\.app\.goo\.gl)(\/|\?|$)/i;
+function safeMapUrl(u){ u = String(u||'').trim(); return MAP_HOST_RE.test(u) ? u : ''; }
+// 주소 칸에 링크를 같이 붙여넣어도 글자와 링크를 자동 분리
+function splitAddr(text){
   const t = String(text||'');
-  if(t.length <= ENTRY_MORE_AT) return esc(t);
-  return `<span>${esc(t.slice(0, ENTRY_MORE_AT))}…</span> <a class="more-link" style="color:#1D4ED8; cursor:pointer; white-space:nowrap;" data-full="${esc(t)}" data-short="${esc(t.slice(0, ENTRY_MORE_AT))}…" onclick="toggleEntryMore(this)">더보기</a>`;
+  const m = t.match(/https?:\/\/[^\s]+/i);
+  if(!m) return { address: t.trim(), url: '' };
+  return { address: t.replace(m[0], '').replace(/\s+/g,' ').trim(), url: m[0] };
+}
+function entryAddrCell(e){
+  if(/^https?:\/\//i.test(String(e.address||'').trim())){
+    const h = safeMapUrl(e.address);
+    return h ? `<a href="${esc(h)}" target="_blank" rel="noopener noreferrer" style="color:#1D4ED8; text-decoration:underline;">📍 지도 보기</a>` : '(주소 미입력)';
+  }
+  const href = safeMapUrl(e.mapUrl) || ('https://map.naver.com/p/search/' + encodeURIComponent(e.address || ''));
+  return entryClip(e.address, href);
+}
+function entryClip(text, href){
+  const t = String(text||'');
+  const lnk = (inner) => href ? `<a href="${esc(href)}" target="_blank" rel="noopener noreferrer" style="color:#1D4ED8; text-decoration:underline;">${inner}</a>` : inner;
+  if(t.length <= ENTRY_MORE_AT) return `<span>${lnk(esc(t))}</span>`;
+  return `<span>${lnk(esc(t.slice(0, ENTRY_MORE_AT)) + '…')}</span> <a class="more-link" style="color:#6B7280; cursor:pointer; white-space:nowrap; font-size:11.5px;" data-full="${esc(t)}" data-short="${esc(t.slice(0, ENTRY_MORE_AT))}…" onclick="toggleEntryMore(this)">더보기</a>`;
 }
 function toggleEntryMore(a){
-  const sp = a.previousElementSibling; const open = a.textContent === '접기';
-  sp.textContent = open ? a.getAttribute('data-short') : a.getAttribute('data-full');
+  const sp = a.previousElementSibling; const inner = sp.querySelector('a') || sp; const open = a.textContent === '접기';
+  inner.textContent = open ? a.getAttribute('data-short') : a.getAttribute('data-full');
   a.textContent = open ? '더보기' : '접기';
 }
 function entryWho(e){
@@ -2361,8 +2384,8 @@ function renderEntryBoxes(nid){
     <p class="helper" style="margin:0 0 8px;">누구나 새로 등록할 수 있어요. 등록한 내용은 본인이 수정·삭제할 수 없어요(오류는 관리자에게 요청).</p>
     ${list.length ? `<div class="rt-wrap"><div class="rt-content"><table class="entry-table">
       <colgroup><col style="width:11%"><col style="width:22%"><col style="width:27%"><col style="width:15%"><col style="width:${admin ? '17' : '25'}%">${admin ? '<col style="width:8%">' : ''}</colgroup>
-      <thead><tr><th>분류</th><th>상호명</th><th>주요서비스</th><th>기수·성함</th><th>주소</th>${admin ? '<th></th>' : ''}</tr></thead>
-      <tbody>${list.map(e => `<tr><td>${esc(e.category||'')}</td><td>${esc(e.company)}</td><td>${entryClip(e.service)}</td><td>${entryWho(e)}</td><td>${entryClip(e.address)}</td>${admin ? `<td><button class="btn btn-ghost btn-sm" onclick="deleteEntry('${e.id}','${nid}')">삭제</button></td>` : ''}</tr>`).join('')}</tbody>
+      <thead><tr><th>분류</th><th>상호명</th><th>주요서비스</th><th>기수·성함</th><th>주소 (클릭시 지도링크)</th>${admin ? '<th></th>' : ''}</tr></thead>
+      <tbody>${list.map(e => `<tr><td>${esc(e.category||'')}</td><td>${esc(e.company)}</td><td>${entryClip(e.service)}</td><td>${entryWho(e)}</td><td>${entryAddrCell(e)}</td>${admin ? `<td><button class="btn btn-ghost btn-sm" onclick="deleteEntry('${e.id}','${nid}')">삭제</button></td>` : ''}</tr>`).join('')}</tbody>
     </table></div></div>` : '<div class="empty" style="padding:14px 0;">아직 등록된 업체가 없어요. 첫 번째로 등록해보세요!</div>'}
     <button class="btn btn-accent btn-block" style="margin-top:8px;" onclick="openEntryModal('${nid}')">+ 내 업체 등록하기</button>
     ${admin ? `<button class="btn btn-ghost btn-block" onclick="openEntryImportModal('${nid}')">⬆ 엑셀로 일괄 등록</button>` : ''}
@@ -2379,6 +2402,7 @@ function entryColType(h){
   if(!t) return null;
   if(/기수.*(성함|이름|성명)|(성함|이름|성명).*기수|동문\/기수|동문.*기수/.test(t)) return 'combo';
   if(/주소|위치|소재지/.test(t)) return 'address';
+  if(/링크|지도|url|naver|네이버/i.test(t)) return 'link';
   if(/분류|구분|카테고리/.test(t)) return 'category';
   if(/상호|업체|사업체|회사|가게|업소/.test(t)) return 'company';
   if(/서비스|업종|취급|메뉴|품목|내용/.test(t)) return 'service';
@@ -2410,7 +2434,8 @@ function parseEntryRows(aoa){
       if(m){ batch = m[1]; name = m[2].trim(); } else name = g('combo');
     }
     batch = String(batch).replace(/[^\d]/g, '');
-    rows.push({ category: g('category'), company, service: g('service'), batch: batch ? Number(batch) : '', name, address: g('address') });
+    const sp = splitAddr(g('address'));
+    rows.push({ category: g('category'), company, service: g('service'), batch: batch ? Number(batch) : '', name, address: sp.address, mapUrl: g('link') || sp.url, _r: i, _ac: map.address });
   }
   return { rows, note };
 }
@@ -2439,6 +2464,10 @@ function handleEntryFile(input){
       const ws = wb.Sheets[wb.SheetNames[0]];
       const aoa = XLSX.utils.sheet_to_json(ws, { header: 1, defval: '', raw: false });
       const { rows, note } = parseEntryRows(aoa);
+      rows.forEach(r => { // 주소 칸에 엑셀 하이퍼링크가 걸려 있으면 그 링크를 사용
+        if(!r.mapUrl && r._ac !== undefined){ const c = ws[XLSX.utils.encode_cell({ r: r._r, c: r._ac })]; if(c && c.l && c.l.Target) r.mapUrl = c.l.Target; }
+        if(r.mapUrl && !safeMapUrl(r.mapUrl)) r.mapUrl = '';
+      });
       const nid = window._entryImport.nid;
       const exist = new Set((entryStore[nid] || []).map(x => (x.company + '|' + x.address).replace(/\s+/g,'')));
       const seen = new Set(); const fresh = []; let skipped = 0;
@@ -2448,8 +2477,8 @@ function handleEntryFile(input){
       box.innerHTML = `
         <p class="helper">${note}. 등록 가능 <b>${fresh.length}건</b>${skipped ? ` · 중복 제외 ${skipped}건` : ''}</p>
         ${fresh.length ? `<div class="rt-wrap" style="max-height:260px; overflow:auto;"><div class="rt-content"><table class="entry-table" style="min-width:480px;">
-          <thead><tr><th>분류</th><th>상호명</th><th>주요서비스</th><th>기수·성함</th><th>주소</th></tr></thead>
-          <tbody>${fresh.slice(0,100).map(r => `<tr><td>${esc(r.category)}</td><td>${esc(r.company)}</td><td>${esc(r.service)}</td><td>${r.batch ? r.batch + '회 ' : ''}${esc(r.name)}</td><td>${esc(r.address)}</td></tr>`).join('')}</tbody>
+          <thead><tr><th>분류</th><th>상호명</th><th>주요서비스</th><th>기수·성함</th><th>주소 (클릭시 지도링크)</th></tr></thead>
+          <tbody>${fresh.slice(0,100).map(r => `<tr><td>${esc(r.category)}</td><td>${esc(r.company)}</td><td>${esc(r.service)}</td><td>${r.batch ? r.batch + '회 ' : ''}${esc(r.name)}</td><td>${esc(r.address)}${r.mapUrl ? ' 🔗' : ''}</td></tr>`).join('')}</tbody>
         </table></div></div>${fresh.length > 100 ? `<p class="helper">미리보기는 100건까지만 보여요 (등록은 전체)</p>` : ''}
         <button class="btn btn-accent btn-block" style="margin-top:10px;" onclick="confirmEntryImport()">${fresh.length}건 등록하기</button>` : '<div class="empty">등록할 새 항목이 없어요</div>'}`;
     }catch(err){ console.error(err); showToast('파일을 읽지 못했어요. 엑셀(.xlsx)/CSV인지 확인해주세요'); }
@@ -2467,7 +2496,7 @@ async function confirmEntryImport(){
         const id = uid() + j;
         batch.set(db.collection('noticeEntries').doc(id), {
           id, noticeId: nid, category: r.category.slice(0,20), company: r.company.slice(0,100), service: r.service.slice(0,200), address: r.address.slice(0,200),
-          memberId: me.id, name: r.name.slice(0,30), batch: r.batch, byAdmin: true, createdAt: now + i + j,
+          memberId: me.id, name: r.name.slice(0,30), batch: r.batch, byAdmin: true, mapUrl: safeMapUrl(r.mapUrl), createdAt: now + i + j,
         });
       });
       await batch.commit();
@@ -2503,14 +2532,19 @@ function openEntryModal(nid){
       <datalist id="enCatList"><option value="식당"><option value="기타"><option value="병원·의료"><option value="법률·세무"><option value="제조·유통"><option value="IT·서비스"></datalist></div>
     <div class="field"><label>상호명 *</label><input id="enCompany" placeholder="예: 영동식당" maxlength="25"></div>
     <div class="field"><label>주요서비스 * <span class="helper">(50자 이내)</span></label><input id="enService" placeholder="예: 한식 · 단체예약 (50자 이내)" maxlength="50"></div>
-    <div class="field"><label>주소 *</label><input id="enAddress" placeholder="예: 서울 강남구 OO로 12 (50자 이내)" maxlength="50"></div>
+    <div class="field"><label>주소 * <span class="helper">(이 글자를 누르면 지도로 연결돼요)</span></label><input id="enAddress" placeholder="예: 서울 강남구 OO로 12 (50자 이내)" maxlength="250"></div>
+    <div class="field"><label>네이버 지도 링크 <span class="helper">(선택 · 주소를 누르면 이 링크로 연결돼요)</span></label><input id="enMap" placeholder="https://naver.me/... 또는 지도 공유 링크" maxlength="300"><p class="helper" style="margin:4px 0 0;">비워두면 주소를 누를 때 네이버 지도 검색으로 연결돼요.</p></div>
     <button class="btn btn-accent btn-block" onclick="addEntry('${nid}')">등록하기</button>
   `);
 }
 function addEntry(nid){
   const me = currentMember(); if(!me) return;
   const v = id => (document.getElementById(id).value || '').trim();
-  const company = v('enCompany'), service = v('enService'), address = v('enAddress');
+  const company = v('enCompany'), service = v('enService');
+  const sp = splitAddr(v('enAddress')); const address = sp.address;
+  let mapUrl = v('enMap') || sp.url;
+  if(!address){ showToast('링크가 아니라 실제 주소(지명)를 입력해주세요. 그 글자에 지도 링크가 걸려요'); return; }
+  if(mapUrl && !safeMapUrl(mapUrl)){ showToast('지도 링크는 네이버·카카오·구글 지도 주소만 쓸 수 있어요'); return; }
   if(company.length > 25 || service.length > 50 || address.length > 50){ showToast('글자 수를 줄여주세요 (상호 25 · 서비스 50 · 주소 50자)'); return; }
   if(!company || !service || !address){ showToast('상호명 · 주요서비스 · 주소는 꼭 입력해주세요'); return; }
   if(!isAdmin() && !confirm('등록하면 본인이 수정·삭제할 수 없어요. 등록할까요?')) return;
@@ -2522,7 +2556,7 @@ function addEntry(nid){
   }
   db.collection('noticeEntries').doc(id).set({
     id, noticeId: nid, category: v('enCat'), company, service, address,
-    memberId: me.id, name: nm, batch: bt, byAdmin, createdAt: Date.now(),
+    memberId: me.id, name: nm, batch: bt, byAdmin, mapUrl: mapUrl || '', createdAt: Date.now(),
   }).then(() => { showToast('등록했어요'); }).catch(() => showToast('등록 실패, 다시 시도해주세요'));
   logActivity('업체 직접 등록', company);
   closeModal();
@@ -2536,7 +2570,7 @@ function deleteEntry(id, nid){
 function exportEntries(nid){
   if(!isAdmin()) return;
   const n = state.notices.find(x => x.id === nid);
-  const rows = (entryStore[nid] || []).map((e,i) => ({ 'No.': i+1, '분류': e.category||'', '상호명': e.company, '주요서비스': e.service, '기수': e.batch||'', '성함': e.name, '주소': e.address, '등록일시': new Date(e.createdAt).toLocaleString('ko-KR') }));
+  const rows = (entryStore[nid] || []).map((e,i) => ({ 'No.': i+1, '분류': e.category||'', '상호명': e.company, '주요서비스': e.service, '기수': e.batch||'', '성함': e.name, '주소': e.address, '지도링크': e.mapUrl||'', '등록일시': new Date(e.createdAt).toLocaleString('ko-KR') }));
   const ws = XLSX.utils.json_to_sheet(rows); const wb = XLSX.utils.book_new(); XLSX.utils.book_append_sheet(wb, ws, '등록명단');
   XLSX.writeFile(wb, `${n ? n.title : '공지'}_회원등록명단.xlsx`);
 }
