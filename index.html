@@ -322,6 +322,7 @@ let state = {
   requests: [],
   posts: [],
   deals: [],
+  features: { deals: false },
   session: null,       // {memberId}
   tab: 'notice',
   calMonth: startOfMonth(new Date()),
@@ -546,6 +547,13 @@ async function init(){
     logVisit();
   }
 
+  try{
+    db.collection('meta').doc('features').onSnapshot(d => {
+      state.features = Object.assign({ deals: false }, d.exists ? d.data() : {});
+      if(!state.features.deals && state.tab === 'deals') state.tab = 'notice';
+      if(state.loaded){ renderTabs(); if(!modalIsOpen()) renderApp(); }
+    }, () => {});
+  }catch(e){}
   ['notice','feed','schedule','deals'].forEach(kind => {
     try{
       db.collection('meta').doc(kind + 'Intro').onSnapshot(d => {
@@ -2176,15 +2184,25 @@ function onSessionChipClick(){
   else openAuthModal();
   renderAll();
 }
+function toggleFeature(key){
+  if(!isAdmin()) return;
+  const on = !(state.features && state.features[key]);
+  state.features = Object.assign({}, state.features, { [key]: on });
+  db.collection('meta').doc('features').set({ [key]: on }, { merge: true }).catch(()=>{ showToast('저장 실패, 다시 시도해주세요'); });
+  logActivity('기능 ' + (on ? '켜기' : '끄기'), key === 'deals' ? '동문장터' : key);
+  if(!on && state.tab === 'deals') state.tab = 'notice';
+  showToast(on ? '동문장터를 켰어요' : '동문장터를 껐어요');
+  renderTabs(); renderApp();
+}
 function renderTabs(){
   const tabs = [
     {id:'notice', label:'공지'},
     {id:'feed', label:'소식'},
     {id:'schedule', label:'일정'},
-    {id:'deals', label:'동문장터'},
     {id:'members', label:'회원'},
     {id:'mypage', label:'마이페이지'},
   ];
+  if(state.features && state.features.deals) tabs.splice(3, 0, {id:'deals', label:'동문장터'});
   document.getElementById('tabs').innerHTML = tabs.map(t =>
     `<button class="tab-btn ${state.tab===t.id?'active':''}" onclick="switchTab('${t.id}')">${t.label}</button>`
   ).join('');
@@ -2688,6 +2706,7 @@ function renderMembersTab(){
     ${pendingCount ? `<button class="btn btn-accent btn-block" onclick="openPendingMeetupsModal()">🕓 승인 대기 모임 (${pendingCount})</button>` : ''}
     <button class="btn btn-ghost btn-block" onclick="exportYearlyReport()">📊 연간 리포트 엑셀 다운로드</button>
     <button class="btn btn-ghost btn-block" onclick="exportAllData()">⬇ 전체 데이터 백업(내보내기)</button>
+    <button class="btn btn-ghost btn-block" onclick="toggleFeature('deals')">🛍 동문장터 ${state.features && state.features.deals ? '끄기 (현재 켜짐)' : '켜기 (현재 꺼짐)'}</button>
     <button class="btn btn-accent btn-block" onclick="openStatsModal()">📈 이용 통계 (방문·조회수·회원별)</button>
     <button class="btn btn-ghost btn-block" onclick="openActivityLogModal()">🗒 관리자 활동 로그 보기</button>
     <button class="btn btn-ghost btn-block" onclick="openReportsModal()">🚩 신고 내역 보기${state.reports && state.reports.filter(r=>!r.resolved).length ? ` (${state.reports.filter(r=>!r.resolved).length})` : ''}</button>
