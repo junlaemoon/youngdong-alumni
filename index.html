@@ -256,6 +256,29 @@ main#app{padding:16px 16px 4px;}
 .footer-contact{ font-size:11.5px; color:var(--ink-soft); margin:0 0 12px; }
 .footer-contact a{ color:var(--river); text-decoration:none; font-weight:600; }
 .footer-copy{ font-size:10px; color:#B0B6C2; margin:0; letter-spacing:.02em; }
+
+/* 리치 텍스트 */
+.rt-wrapper{border:1px solid var(--line); border-radius:12px; overflow:hidden; background:#fff; margin-bottom:12px;}
+.rt-bar{display:flex; flex-wrap:wrap; gap:4px; align-items:center; padding:6px; background:#F4F5F8; border-bottom:1px solid var(--line);}
+.rt-tpanel{display:flex; flex-wrap:wrap; gap:4px; align-items:center; padding:6px; background:#EEF2F8; border-bottom:1px solid var(--line);}
+.rt-tpanel input{width:48px; padding:4px 6px; border:1px solid var(--line); border-radius:6px; font-size:13px;}
+.rt-b{min-width:30px; height:30px; padding:0 8px; border:1px solid var(--line); background:#fff; border-radius:8px; font-size:12.5px; cursor:pointer; font-family:inherit; color:var(--ink);}
+.rt-b:active{background:#E5E7EB;}
+.rt-sep{width:1px; height:20px; background:var(--line); margin:0 2px;}
+.rt-lab{font-size:11px; color:var(--ink-soft);}
+.rt-area{min-height:200px; max-height:48vh; overflow:auto; padding:12px; outline:none;}
+.rt-area:empty:before{content:attr(data-ph); color:#9CA3AF;}
+.rt-content{font-size:13.5px; line-height:1.65; word-break:break-word;}
+.rt-content p,.rt-content div{margin:0 0 6px;}
+.rt-content h2,.rt-content h3,.rt-content h4{margin:10px 0 6px; font-size:16px;}
+.rt-content blockquote{margin:8px 0; padding:6px 12px; border-left:3px solid #CBD5E1; color:var(--ink-soft); background:#F8FAFC;}
+.rt-content ul,.rt-content ol{margin:4px 0 8px; padding-left:22px;}
+.rt-content hr{border:none; border-top:1px solid var(--line); margin:10px 0;}
+.rt-content a{color:#1D4ED8; text-decoration:underline;}
+.rt-content table{border-collapse:collapse; margin:8px 0; min-width:60%;}
+.rt-content th,.rt-content td{border:1px solid #CBD5E1; padding:6px 8px; min-width:48px; vertical-align:top; font-size:13px;}
+.rt-content th{background:#F1F5F9; font-weight:700;}
+.rt-wrap{overflow-x:auto; margin:6px 0;}
 </style>
 </head>
 <body>
@@ -1114,7 +1137,7 @@ function exportYearlyReport(){
 function addNotice(title, content){
   if(!title.trim() || !content.trim()){ showToast('제목과 내용을 입력해주세요'); return; }
   const me = currentMember();
-  state.notices.unshift({ id: uid(), title: title.trim(), content: content.trim(), author: me.name, authorId: me.id, date: ymd(new Date()), createdAt: Date.now() });
+  state.notices.unshift({ id: uid(), title: title.trim(), content: content.trim(), rich: true, author: me.name, authorId: me.id, date: ymd(new Date()), createdAt: Date.now() });
   saveNotices();
   closeModal();
   renderAll();
@@ -1129,7 +1152,7 @@ function openEditNoticeModal(id){
   if(!n) return;
   openModal('공지 수정', `
     <div class="field"><label>제목</label><input id="editNoticeTitle" value="${n.title.replace(/"/g,'&quot;')}"></div>
-    <div class="field"><label>내용</label><textarea id="editNoticeContent" class="tall">${n.content}</textarea></div>
+    <div class="field"><label>내용</label>${richEditorHtml('editNoticeContent', richInitial(n), '')}</div>
     <button class="btn btn-accent btn-block" onclick="saveEditedNotice('${id}')">저장</button>
   `);
 }
@@ -1137,9 +1160,9 @@ function saveEditedNotice(id){
   const n = state.notices.find(x=>x.id===id);
   if(!n) return;
   const title = document.getElementById('editNoticeTitle').value.trim();
-  const content = document.getElementById('editNoticeContent').value.trim();
+  const content = getRich('editNoticeContent');
   if(!title || !content){ showToast('제목과 내용을 입력해주세요'); return; }
-  n.title = title; n.content = content; n.editedAt = ymd(new Date());
+  n.title = title; n.content = content; n.rich = true; n.editedAt = ymd(new Date());
   saveNotices();
   closeModal();
   showToast('공지를 수정했어요');
@@ -1468,6 +1491,7 @@ function addPost(title, content){
     authorName: me.name,
     title,
     content,
+    rich: true,
     image: pendingPostImage,
     createdAt: Date.now(),
     likes: [],
@@ -1490,7 +1514,7 @@ function openEditPostModal(postId){
   pendingPostImage = p.image || null;
   openModal('소식 수정', `
     <div class="field"><label>제목</label><input id="editPostTitle" value="${(p.title||'').replace(/"/g,'&quot;')}"></div>
-    <div class="field"><label>내용</label><textarea id="editPostContent">${p.content||''}</textarea></div>
+    <div class="field"><label>내용</label>${richEditorHtml('editPostContent', richInitial(p), '')}</div>
     <label class="file-btn">📷 사진 변경<input type="file" accept="image/*" style="display:none" onchange="handleImageSelect(this)"></label>
     ${p.image ? `<button class="link-btn" style="margin-left:10px;" onclick="removePendingImage()">사진 제거</button>` : ''}
     <img id="postImagePreview" class="image-preview" src="${p.image||''}" style="${p.image ? 'display:block;' : ''}">
@@ -1506,10 +1530,11 @@ function saveEditedPost(postId){
   const p = state.posts.find(x=>x.id===postId);
   if(!p) return;
   const title = document.getElementById('editPostTitle').value.trim();
-  const content = document.getElementById('editPostContent').value.trim();
+  const content = getRich('editPostContent');
   if(!title){ showToast('제목을 입력해주세요'); return; }
   p.title = title;
   p.content = content;
+  p.rich = true;
   p.image = pendingPostImage;
   p.editedAt = Date.now();
   pendingPostImage = null;
@@ -1637,8 +1662,8 @@ function openNoticeModal(){
   if(!requireWritePermission('notice')) return;
   openModal('공지 작성', `
     <div class="field"><label>제목</label><input id="noticeTitle" placeholder="예: 2026년 정기총회 안내"></div>
-    <div class="field"><label>내용</label><textarea id="noticeContent" class="tall" placeholder="공지 내용을 적어주세요"></textarea></div>
-    <button class="btn btn-accent btn-block" onclick="addNotice(document.getElementById('noticeTitle').value, document.getElementById('noticeContent').value)">등록</button>
+    <div class="field"><label>내용</label>${richEditorHtml('noticeContent', '', '공지 내용을 적어주세요')}</div>
+    <button class="btn btn-accent btn-block" onclick="addNotice(document.getElementById('noticeTitle').value, getRich('noticeContent'))">등록</button>
   `);
 }
 function openMeetupModal(){
@@ -1877,10 +1902,10 @@ function openPostModal(){
   pendingPostImage = null;
   openModal('소식 남기기', `
     <div class="field"><label>제목</label><input id="postTitle" placeholder="예: 8월 동문 모임 후기"></div>
-    <div class="field"><label>내용</label><textarea id="postContent" placeholder="동문들과 나누고 싶은 소식을 적어주세요"></textarea></div>
+    <div class="field"><label>내용</label>${richEditorHtml('postContent', '', '동문들과 나누고 싶은 소식을 적어주세요')}</div>
     <label class="file-btn">📷 사진 추가 (선택)<input type="file" accept="image/*" style="display:none" onchange="handleImageSelect(this)"></label>
     <img id="postImagePreview" class="image-preview">
-    <button class="btn btn-accent btn-block" style="margin-top:14px;" onclick="addPost(document.getElementById('postTitle').value, document.getElementById('postContent').value)">올리기</button>
+    <button class="btn btn-accent btn-block" style="margin-top:14px;" onclick="addPost(document.getElementById('postTitle').value, getRich('postContent'))">올리기</button>
   `);
 }
 
@@ -2049,6 +2074,178 @@ function exportDealParticipants(id){
   const ws = XLSX.utils.json_to_sheet(rows);
   const wb = XLSX.utils.book_new(); XLSX.utils.book_append_sheet(wb, ws, '참여자명단');
   XLSX.writeFile(wb, `${d.title}_공동구매참여자.xlsx`);
+}
+
+/* ---------------------------------------------------------
+   리치 텍스트 편집기 (글꼴·색·표 등) + 안전한 HTML 정리(sanitize)
+--------------------------------------------------------- */
+const RT_ALLOWED = new Set(['B','STRONG','I','EM','U','S','STRIKE','DEL','SPAN','P','DIV','BR','H2','H3','H4','UL','OL','LI','BLOCKQUOTE','HR','A','TABLE','THEAD','TBODY','TR','TD','TH','SUB','SUP']);
+const RT_DROP = new Set(['SCRIPT','STYLE','IFRAME','OBJECT','EMBED','LINK','META','NOSCRIPT','TEMPLATE','SVG','MATH','FORM','INPUT','BUTTON','SELECT','TEXTAREA','VIDEO','AUDIO','IMG']);
+const RT_FONT_PX = {1:'11px',2:'12px',3:'14px',4:'16px',5:'19px',6:'23px',7:'28px'};
+function rtCleanStyle(st){
+  const ok = ['color','background-color','font-size','text-align','font-weight','font-style','text-decoration','width','vertical-align'];
+  const out = [];
+  String(st||'').split(';').forEach(rule => {
+    const i = rule.indexOf(':'); if(i < 0) return;
+    const k = rule.slice(0,i).trim().toLowerCase(), v = rule.slice(i+1).trim();
+    if(!ok.includes(k)) return;
+    if(!/^[#\w\s.,()%-]+$/.test(v) || /url|expression|javascript/i.test(v)) return;
+    if(k === 'font-size' && !/^[\d.]+(px|pt|em|rem|%)$/.test(v)) return;
+    if(k === 'width' && !/^[\d.]+(px|%)$/.test(v)) return;
+    out.push(k + ':' + v);
+  });
+  return out.join(';');
+}
+function sanitizeRich(html, wrapTables){
+  const doc = new DOMParser().parseFromString('<body>' + String(html||'') + '</body>', 'text/html');
+  const root = document.createElement('div');
+  function walk(src, dst){
+    src.childNodes.forEach(node => {
+      if(node.nodeType === 3){ dst.appendChild(document.createTextNode(node.nodeValue)); return; }
+      if(node.nodeType !== 1) return;
+      const tag = node.nodeName;
+      if(RT_DROP.has(tag)) return;
+      if(tag === 'FONT'){
+        const sp = document.createElement('span');
+        const st = [];
+        if(node.getAttribute('color') && /^[#\w]+$/.test(node.getAttribute('color'))) st.push('color:' + node.getAttribute('color'));
+        const sz = node.getAttribute('size'); if(sz && RT_FONT_PX[sz]) st.push('font-size:' + RT_FONT_PX[sz]);
+        const extra = rtCleanStyle(node.getAttribute('style')); if(extra) st.push(extra);
+        if(st.length) sp.setAttribute('style', st.join(';'));
+        walk(node, sp); dst.appendChild(sp); return;
+      }
+      if(!RT_ALLOWED.has(tag)){ walk(node, dst); return; }
+      const el = document.createElement(tag.toLowerCase());
+      const style = rtCleanStyle(node.getAttribute('style'));
+      if(style) el.setAttribute('style', style);
+      if(tag === 'A'){
+        const href = (node.getAttribute('href')||'').trim();
+        if(/^(https?:\/\/|mailto:|tel:)/i.test(href)){ el.setAttribute('href', href); el.setAttribute('target','_blank'); el.setAttribute('rel','noopener noreferrer'); }
+      }
+      if(tag === 'TD' || tag === 'TH'){
+        ['colspan','rowspan'].forEach(a => { const v = parseInt(node.getAttribute(a),10); if(v > 1 && v < 30) el.setAttribute(a, String(v)); });
+      }
+      walk(node, el);
+      if(wrapTables && tag === 'TABLE'){ const w = document.createElement('div'); w.className = 'rt-wrap'; w.appendChild(el); dst.appendChild(w); }
+      else dst.appendChild(el);
+    });
+  }
+  walk(doc.body, root);
+  return root.innerHTML;
+}
+function itemPlain(item){
+  if(!item || !item.content) return '';
+  if(!item.rich) return item.content;
+  return new DOMParser().parseFromString(item.content, 'text/html').body.textContent || '';
+}
+function richView(item, plainStyle){
+  if(!item || !item.content) return '';
+  if(item.rich) return `<div class="rt-content">${sanitizeRich(item.content, true)}</div>`;
+  return `<p style="${plainStyle || 'font-size:13.5px; line-height:1.6; margin:0;'}">${esc(item.content).replace(/\n/g,'<br>')}</p>`;
+}
+function richInitial(item){
+  if(!item || !item.content) return '';
+  return item.rich ? sanitizeRich(item.content, false) : esc(item.content).replace(/\n/g,'<br>');
+}
+
+let rtSel = null;
+document.addEventListener('selectionchange', () => {
+  const a = document.querySelector('.rt-area'); const s = window.getSelection();
+  if(a && s && s.rangeCount && a.contains(s.getRangeAt(0).commonAncestorContainer)) rtSel = s.getRangeAt(0).cloneRange();
+});
+function rtFocus(){
+  const a = document.querySelector('.rt-area'); if(!a) return null;
+  a.focus();
+  if(rtSel){ const s = window.getSelection(); s.removeAllRanges(); s.addRange(rtSel); }
+  return a;
+}
+function rtCmd(cmd, val){
+  if(!rtFocus()) return;
+  try{ document.execCommand('styleWithCSS', false, true); }catch(e){}
+  document.execCommand(cmd, false, val === undefined ? null : val);
+}
+function rtLink(){
+  if(!rtFocus()) return;
+  let u = prompt('연결할 주소(URL)를 입력하세요', 'https://'); if(!u) return;
+  if(!/^(https?:\/\/|mailto:|tel:)/i.test(u)) u = 'https://' + u;
+  document.execCommand('createLink', false, u);
+}
+function rtCell(){
+  const n = rtSel && rtSel.startContainer; if(!n) return null;
+  const el = n.nodeType === 1 ? n : n.parentElement;
+  const c = el && el.closest('td,th'); const a = document.querySelector('.rt-area');
+  return c && a && a.contains(c) ? c : null;
+}
+function rtToggleTable(){ const p = document.getElementById('rtTablePanel'); if(p) p.style.display = p.style.display === 'none' ? 'flex' : 'none'; }
+function rtInsertTable(){
+  const r = Math.min(20, Math.max(1, parseInt(document.getElementById('rtRows').value,10) || 3));
+  const c = Math.min(8, Math.max(1, parseInt(document.getElementById('rtCols').value,10) || 3));
+  let h = '<table><tbody>';
+  for(let i=0;i<r;i++){ h += '<tr>'; for(let j=0;j<c;j++) h += (i===0 ? '<th><br></th>' : '<td><br></td>'); h += '</tr>'; }
+  h += '</tbody></table><p><br></p>';
+  if(!rtFocus()) return;
+  document.execCommand('insertHTML', false, h);
+  rtToggleTable();
+}
+function rtTableOp(op){
+  const cell = rtCell();
+  if(!cell){ showToast('표 안의 칸을 먼저 눌러주세요'); return; }
+  const row = cell.parentElement, table = cell.closest('table'), idx = cell.cellIndex;
+  if(op === 'addRow'){ const nr = row.cloneNode(false); [...row.cells].forEach(() => { const td = document.createElement('td'); td.innerHTML = '<br>'; nr.appendChild(td); }); row.after(nr); }
+  else if(op === 'delRow'){ if(table.rows.length <= 1) table.remove(); else row.remove(); }
+  else if(op === 'addCol'){ [...table.rows].forEach((r,i) => { const c = document.createElement(i===0 && r.cells[0] && r.cells[0].tagName==='TH' ? 'th' : 'td'); c.innerHTML = '<br>'; const ref = r.cells[idx]; if(ref) ref.after(c); else r.appendChild(c); }); }
+  else if(op === 'delCol'){ if(row.cells.length <= 1) table.remove(); else [...table.rows].forEach(r => { if(r.cells[idx]) r.cells[idx].remove(); }); }
+  else if(op === 'delTable'){ table.remove(); }
+}
+function getRich(id){
+  const a = document.getElementById(id); if(!a) return '';
+  const html = sanitizeRich(a.innerHTML, false);
+  const tmp = document.createElement('div'); tmp.innerHTML = html;
+  const hasText = (tmp.textContent || '').trim().length > 0;
+  const hasObj = !!tmp.querySelector('table,hr');
+  return (hasText || hasObj) ? html : '';
+}
+function rtPaste(e){
+  e.preventDefault();
+  const cd = e.clipboardData || window.clipboardData;
+  const html = cd.getData('text/html');
+  if(html){ document.execCommand('insertHTML', false, sanitizeRich(html, false)); }
+  else { document.execCommand('insertText', false, cd.getData('text/plain')); }
+}
+function rtB(label, onclick, title, style){
+  return `<button type="button" class="rt-b" title="${title||''}" style="${style||''}" onpointerdown="event.preventDefault()" onclick="${onclick}">${label}</button>`;
+}
+function richEditorHtml(id, initialHtml, placeholder){
+  const colors = ['#111827','#DC2626','#EA580C','#16A34A','#2563EB','#7C3AED','#6B7280'];
+  const hls = ['#FEF08A','#BBF7D0','#BFDBFE','#FBCFE8','#E5E7EB'];
+  return `
+  <div class="rt-wrapper">
+    <div class="rt-bar">
+      ${rtB('<b>B</b>',"rtCmd('bold')",'굵게')}${rtB('<i>I</i>',"rtCmd('italic')",'기울임')}${rtB('<u>U</u>',"rtCmd('underline')",'밑줄')}${rtB('<s>S</s>',"rtCmd('strikeThrough')",'취소선')}
+      <span class="rt-sep"></span>
+      ${rtB('가⁻',"rtCmd('fontSize',2)",'작게')}${rtB('가',"rtCmd('fontSize',3)",'보통')}${rtB('가⁺',"rtCmd('fontSize',5)",'크게')}${rtB('가⁺⁺',"rtCmd('fontSize',6)",'아주 크게')}
+      <span class="rt-sep"></span>
+      ${rtB('H',"rtCmd('formatBlock','<h3>')",'제목')}${rtB('¶',"rtCmd('formatBlock','<p>')",'본문')}${rtB('❝',"rtCmd('formatBlock','<blockquote>')",'인용')}
+      <span class="rt-sep"></span>
+      ${rtB('☰',"rtCmd('justifyLeft')",'왼쪽 정렬')}${rtB('≡',"rtCmd('justifyCenter')",'가운데 정렬')}${rtB('☷',"rtCmd('justifyRight')",'오른쪽 정렬')}
+      ${rtB('• 목록',"rtCmd('insertUnorderedList')",'글머리 목록')}${rtB('1. 목록',"rtCmd('insertOrderedList')",'번호 목록')}
+      <span class="rt-sep"></span>
+      <span class="rt-lab">글자색</span>${colors.map(c => rtB('', `rtCmd('foreColor','${c}')`, '글자색', `background:${c}; width:20px; padding:0;`)).join('')}
+      <span class="rt-lab">배경</span>${hls.map(c => rtB('', `rtCmd('hiliteColor','${c}')`, '형광펜', `background:${c}; width:20px; padding:0;`)).join('')}
+      <span class="rt-sep"></span>
+      ${rtB('🔗 링크',"rtLink()",'링크')}${rtB('─ 구분선',"rtCmd('insertHorizontalRule')",'구분선')}${rtB('▦ 표',"rtToggleTable()",'표 삽입')}
+      ${rtB('↶',"rtCmd('undo')",'되돌리기')}${rtB('↷',"rtCmd('redo')",'다시')}${rtB('서식 지우기',"rtCmd('removeFormat')",'서식 지우기')}
+    </div>
+    <div id="rtTablePanel" class="rt-tpanel" style="display:none;">
+      <span class="rt-lab">행</span><input id="rtRows" type="number" min="1" max="20" value="3">
+      <span class="rt-lab">열</span><input id="rtCols" type="number" min="1" max="8" value="3">
+      ${rtB('표 넣기',"rtInsertTable()",'', 'background:var(--ink); color:#fff;')}
+      <span class="rt-sep"></span>
+      <span class="rt-lab">표 편집(칸을 누른 뒤)</span>
+      ${rtB('행+',"rtTableOp('addRow')")}${rtB('행−',"rtTableOp('delRow')")}${rtB('열+',"rtTableOp('addCol')")}${rtB('열−',"rtTableOp('delCol')")}${rtB('표 삭제',"rtTableOp('delTable')")}
+    </div>
+    <div id="${id}" class="rt-area rt-content" contenteditable="true" data-ph="${placeholder||''}" onpaste="rtPaste(event)">${initialHtml||''}</div>
+  </div>`;
 }
 
 /* ---------------------------------------------------------
@@ -2250,17 +2447,35 @@ function noticeCardFull(n){
   const admin = isAdmin();
   return `
     <div class="card">
-      <h3>${n.title}</h3>
+      <h3>${n.pinned ? '📌 ' : ''}${n.title}</h3>
       <p class="meetup-meta" style="margin:2px 0 8px;">${memberDisplayName(n.authorId, n.author)} · ${n.date}${n.editedAt ? ' · 수정됨' : ''}</p>
-      <p style="font-size:13.5px; line-height:1.6; margin:0;">${n.content.replace(/\n/g,'<br>')}</p>
-      ${admin ? `<div style="margin-top:10px; display:flex; gap:8px;"><button class="btn btn-ghost btn-sm" onclick="openEditNoticeModal('${n.id}')">수정</button><button class="btn btn-coral btn-sm" onclick="deleteNotice('${n.id}')">삭제</button></div>` : ''}
+      ${richView(n)}
+      ${(admin || hasPerm('notice')) ? `<div style="margin-top:10px; display:flex; gap:8px; flex-wrap:wrap;"><button class="btn btn-ghost btn-sm" onclick="togglePinNotice('${n.id}')">${n.pinned ? '📌 고정 해제' : '📌 상단 고정'}</button>${admin ? `<button class="btn btn-ghost btn-sm" onclick="openEditNoticeModal('${n.id}')">수정</button><button class="btn btn-coral btn-sm" onclick="deleteNotice('${n.id}')">삭제</button>` : ''}</div>` : ''}
     </div>
   `;
+}
+function pinFirst(arr){
+  const pinned = arr.filter(x => x.pinned).sort((a,b) => (b.pinnedAt||0) - (a.pinnedAt||0));
+  return pinned.concat(arr.filter(x => !x.pinned));
+}
+function togglePinNotice(id){
+  if(!(isAdmin() || hasPerm('notice'))) return;
+  const n = state.notices.find(x => x.id === id); if(!n) return;
+  if(n.pinned){ delete n.pinned; delete n.pinnedAt; } else { n.pinned = true; n.pinnedAt = Date.now(); }
+  saveNotices(); logActivity(n.pinned ? '공지 상단 고정' : '공지 고정 해제', n.title);
+  closeModal(); showToast(n.pinned ? '상단에 고정했어요' : '고정을 해제했어요'); renderAll();
+}
+function togglePinPost(id){
+  if(!(isAdmin() || hasPerm('feed'))) return;
+  const p = state.posts.find(x => x.id === id); if(!p) return;
+  if(p.pinned){ delete p.pinned; delete p.pinnedAt; } else { p.pinned = true; p.pinnedAt = Date.now(); }
+  savePosts(); logActivity(p.pinned ? '소식 상단 고정' : '소식 고정 해제', p.title || '');
+  closeModal(); showToast(p.pinned ? '상단에 고정했어요' : '고정을 해제했어요'); renderAll();
 }
 function noticeCardCompact(n){
   return `
     <div class="meetup" style="cursor:pointer;" onclick="openNoticeDetailModal('${n.id}')">
-      <p class="meetup-title" style="margin:0 0 4px;">${n.title}</p>
+      <p class="meetup-title" style="margin:0 0 4px;">${n.pinned ? '📌 ' : ''}${n.title}</p>
       <p class="meetup-meta" style="margin:0;">${memberDisplayName(n.authorId, n.author)} · ${n.date}</p>
     </div>
   `;
@@ -2274,9 +2489,11 @@ function openNoticeDetailModal(id){
 }
 function renderNoticeList(){
   const q = (state.noticeSearch||'').trim().toLowerCase();
-  const list = q ? state.notices.filter(n => n.title.toLowerCase().includes(q) || n.content.toLowerCase().includes(q)) : state.notices;
+  const all = pinFirst(state.notices);
+  const list = q ? all.filter(n => n.title.toLowerCase().includes(q) || itemPlain(n).toLowerCase().includes(q)) : all;
   if(list.length === 0) return q ? `<div class="empty">검색 결과가 없어요</div>` : `<div class="empty">아직 공지가 없어요</div>`;
-  return list.map(noticeCardCompact).join('');
+  if(q) return list.map(noticeCardCompact).join('');
+  return noticeCardFull(list[0]) + (list.length > 1 ? list.slice(1).map(noticeCardCompact).join('') : '');
 }
 function onNoticeSearch(v){
   state.noticeSearch = v;
@@ -2300,9 +2517,9 @@ function postCardFull(p){
   const canDelete = me && (me.id === p.authorId || isAdmin());
   return `
     <div class="card">
-      <h3>${p.title || '(제목 없음)'}</h3>
+      <h3>${p.pinned ? '📌 ' : ''}${p.title || '(제목 없음)'}</h3>
       <p class="meetup-meta" style="margin:2px 0 10px;">${memberDisplayName(p.authorId, p.authorName)} · ${fmtTimeAgo(p.createdAt)}${p.editedAt ? ' · 수정됨' : ''}</p>
-      ${p.content ? `<p class="post-content">${p.content.replace(/\n/g,'<br>')}</p>` : ''}
+      ${p.content ? richView(p, 'font-size:13.5px; line-height:1.6; margin:0 0 10px;') : ''}
       ${p.image ? `<img class="post-image" src="${p.image}">` : ''}
       <div class="post-actions-row">
         <button class="like-btn ${liked?'liked':''}" onclick="toggleLike('${p.id}')">${liked ? '♥' : '♡'} ${p.likes.length}</button>
@@ -2310,6 +2527,7 @@ function postCardFull(p){
         <span style="margin-left:auto; display:flex; gap:6px;">
           ${canEdit ? `<button class="btn btn-ghost btn-sm" onclick="openEditPostModal('${p.id}')">수정</button>` : ''}
           ${!canEdit && me ? `<button class="btn btn-ghost btn-sm" onclick="reportPost('${p.id}')">🚩 신고</button>` : ''}
+          ${(isAdmin() || hasPerm('feed')) ? `<button class="btn btn-ghost btn-sm" onclick="togglePinPost('${p.id}')">${p.pinned ? '📌 해제' : '📌 고정'}</button>` : ''}
           ${canDelete ? `<button class="btn btn-ghost btn-sm" onclick="deletePost('${p.id}')">삭제</button>` : ''}
         </span>
       </div>
@@ -2330,7 +2548,7 @@ function postCardCompact(p){
     <div class="meetup" style="cursor:pointer; display:flex; gap:12px; align-items:center;" onclick="openPostDetailModal('${p.id}')">
       ${p.image ? `<img src="${p.image}" style="width:56px;height:56px;border-radius:10px;object-fit:cover;flex-shrink:0;">` : `<div class="post-avatar" style="flex-shrink:0;">${memberDisplayName(p.authorId, p.authorName).slice(0,1)}</div>`}
       <div style="min-width:0; flex:1;">
-        <p class="meetup-title" style="margin:0 0 3px; font-size:13.5px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">${p.title || '(제목 없음)'}</p>
+        <p class="meetup-title" style="margin:0 0 3px; font-size:13.5px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">${p.pinned ? '📌 ' : ''}${p.title || '(제목 없음)'}</p>
         <p class="meetup-meta" style="margin:0;">${memberDisplayName(p.authorId, p.authorName)} · ${fmtTimeAgo(p.createdAt)} · ♡${p.likes.length} 💬${p.comments.length}</p>
       </div>
     </div>
@@ -2344,10 +2562,11 @@ function openPostDetailModal(id){
 }
 function renderFeedList(){
   const q = (state.feedSearch||'').trim().toLowerCase();
-  let list = [...state.posts].sort((a,b) => b.createdAt - a.createdAt);
-  if(q) list = list.filter(p => (p.title||'').toLowerCase().includes(q) || (p.content||'').toLowerCase().includes(q));
+  let list = pinFirst([...state.posts].sort((a,b) => b.createdAt - a.createdAt));
+  if(q) list = list.filter(p => (p.title||'').toLowerCase().includes(q) || itemPlain(p).toLowerCase().includes(q));
   if(list.length === 0) return q ? `<div class="empty">검색 결과가 없어요</div>` : `<div class="empty">아직 올라온 소식이 없어요, 첫 소식을 남겨보세요</div>`;
-  return list.map(postCardCompact).join('');
+  if(q) return list.map(postCardCompact).join('');
+  return postCardFull(list[0]) + list.slice(1).map(postCardCompact).join('');
 }
 function onFeedSearch(v){
   state.feedSearch = v;
