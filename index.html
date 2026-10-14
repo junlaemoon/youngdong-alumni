@@ -2532,14 +2532,14 @@ function openEntryModal(nid){
       <datalist id="enCatList"><option value="식당"><option value="기타"><option value="병원·의료"><option value="법률·세무"><option value="제조·유통"><option value="IT·서비스"></datalist></div>
     <div class="field"><label>상호명 *</label><input id="enCompany" placeholder="예: 영동식당" maxlength="25"></div>
     <div class="field"><label>주요서비스 * <span class="helper">(50자 이내)</span></label><input id="enService" placeholder="예: 한식 · 단체예약 (50자 이내)" maxlength="50"></div>
-    <div class="field"><label>주소 * <span class="helper">(이 글자를 누르면 지도로 연결돼요)</span></label><input id="enAddress" placeholder="예: 서울 강남구 OO로 12 (50자 이내)" maxlength="250"></div>
-    <div class="field"><label>네이버 지도 링크 <span class="helper">(선택 · 주소를 누르면 이 링크로 연결돼요)</span></label><input id="enMap" placeholder="https://naver.me/... 또는 지도 공유 링크" maxlength="300"><p class="helper" style="margin:4px 0 0;">비워두면 주소를 누를 때 네이버 지도 검색으로 연결돼요.</p></div>
+    <div class="field"><label>주소 * <span class="helper">(이 글자를 누르면 네이버 지도로 자동 연결돼요)</span></label><input id="enAddress" placeholder="예: 서울 강남구 OO로 12 / 강남구청역 행당점 (50자 이내)" maxlength="250"></div>
+    ${isAdmin() ? `<div class="field"><label>지도 링크 직접 지정 <span class="helper">(관리자 전용·선택 — 비우면 자동)</span></label><input id="enMap" placeholder="자동 연결이 엉뚱한 곳일 때만 네이버 지도 공유 링크 입력" maxlength="300"></div>` : ''}
     <button class="btn btn-accent btn-block" onclick="addEntry('${nid}')">등록하기</button>
   `);
 }
 function addEntry(nid){
   const me = currentMember(); if(!me) return;
-  const v = id => (document.getElementById(id).value || '').trim();
+  const v = id => ((document.getElementById(id) || {}).value || '').trim();
   const company = v('enCompany'), service = v('enService');
   const sp = splitAddr(v('enAddress')); const address = sp.address;
   let mapUrl = v('enMap') || sp.url;
