@@ -294,6 +294,8 @@ main#app{padding:16px 16px 4px;}
 }
 .rt-content td.rt-sel, .rt-content th.rt-sel{outline:2px solid #2563EB; outline-offset:-2px;}
 .rt-area table{table-layout:auto;}
+.entry-table{table-layout:fixed; width:100%; min-width:520px;}
+.entry-table td,.entry-table th{word-break:break-all; font-size:12.5px;}
 </style>
 </head>
 <body>
@@ -2335,6 +2337,17 @@ function startEntriesListeners(){
     } else if(entryStore[nid]) renderEntryBoxes(nid);
   });
 }
+const ENTRY_MORE_AT = 20;
+function entryClip(text){
+  const t = String(text||'');
+  if(t.length <= ENTRY_MORE_AT) return esc(t);
+  return `<span>${esc(t.slice(0, ENTRY_MORE_AT))}…</span> <a class="more-link" style="color:#1D4ED8; cursor:pointer; white-space:nowrap;" data-full="${esc(t)}" data-short="${esc(t.slice(0, ENTRY_MORE_AT))}…" onclick="toggleEntryMore(this)">더보기</a>`;
+}
+function toggleEntryMore(a){
+  const sp = a.previousElementSibling; const open = a.textContent === '접기';
+  sp.textContent = open ? a.getAttribute('data-short') : a.getAttribute('data-full');
+  a.textContent = open ? '더보기' : '접기';
+}
 function entryWho(e){
   const label = (e.batch ? e.batch + '회 ' : '') + (currentMember() ? e.name : maskName(e.name));
   return esc(label);
@@ -2346,9 +2359,10 @@ function renderEntryBoxes(nid){
   const html = `
     <div class="section-title" style="margin-top:14px;">회원 직접 등록 명단 (${list.length})</div>
     <p class="helper" style="margin:0 0 8px;">누구나 새로 등록할 수 있어요. 등록한 내용은 본인이 수정·삭제할 수 없어요(오류는 관리자에게 요청).</p>
-    ${list.length ? `<div class="rt-wrap"><div class="rt-content"><table>
+    ${list.length ? `<div class="rt-wrap"><div class="rt-content"><table class="entry-table">
+      <colgroup><col style="width:11%"><col style="width:22%"><col style="width:27%"><col style="width:15%"><col style="width:${admin ? '17' : '25'}%">${admin ? '<col style="width:8%">' : ''}</colgroup>
       <thead><tr><th>분류</th><th>상호명</th><th>주요서비스</th><th>기수·성함</th><th>주소</th>${admin ? '<th></th>' : ''}</tr></thead>
-      <tbody>${list.map(e => `<tr><td>${esc(e.category||'')}</td><td>${esc(e.company)}</td><td>${esc(e.service)}</td><td>${entryWho(e)}</td><td>${esc(e.address)}</td>${admin ? `<td><button class="btn btn-ghost btn-sm" onclick="deleteEntry('${e.id}','${nid}')">삭제</button></td>` : ''}</tr>`).join('')}</tbody>
+      <tbody>${list.map(e => `<tr><td>${esc(e.category||'')}</td><td>${esc(e.company)}</td><td>${entryClip(e.service)}</td><td>${entryWho(e)}</td><td>${entryClip(e.address)}</td>${admin ? `<td><button class="btn btn-ghost btn-sm" onclick="deleteEntry('${e.id}','${nid}')">삭제</button></td>` : ''}</tr>`).join('')}</tbody>
     </table></div></div>` : '<div class="empty" style="padding:14px 0;">아직 등록된 업체가 없어요. 첫 번째로 등록해보세요!</div>'}
     <button class="btn btn-accent btn-block" style="margin-top:8px;" onclick="openEntryModal('${nid}')">+ 내 업체 등록하기</button>
     ${admin && list.length ? `<button class="btn btn-ghost btn-block" onclick="exportEntries('${nid}')">⬇ 등록 명단 엑셀</button>` : ''}
@@ -2373,11 +2387,11 @@ function openEntryModal(nid){
   openModal('내 업체 등록', `
     <p class="helper">등록 후에는 <b>본인이 수정·삭제할 수 없어요.</b> 오탈자는 제출 전에 꼭 확인해주세요.</p>
     <div class="card" style="background:#F7F8FA; font-size:13px;">기수·성함: <b>${me.batch ? esc(String(batchNumber(me.batch))) + '회 ' : ''}${esc(me.name)}</b> (내 정보로 자동 입력)</div>
-    <div class="field"><label>분류</label><input id="enCat" list="enCatList" placeholder="예: 식당 / 병원 / 법률 / 기타" maxlength="20">
+    <div class="field"><label>분류</label><input id="enCat" list="enCatList" placeholder="예: 식당 / 병원 / 법률 / 기타" maxlength="10">
       <datalist id="enCatList"><option value="식당"><option value="기타"><option value="병원·의료"><option value="법률·세무"><option value="제조·유통"><option value="IT·서비스"></datalist></div>
-    <div class="field"><label>상호명 *</label><input id="enCompany" placeholder="예: 영동식당" maxlength="60"></div>
-    <div class="field"><label>주요서비스 *</label><input id="enService" placeholder="예: 한식, 단체 예약 / 수입차 정비 등" maxlength="100"></div>
-    <div class="field"><label>주소 *</label><input id="enAddress" placeholder="예: 서울 강남구 OO로 12" maxlength="120"></div>
+    <div class="field"><label>상호명 *</label><input id="enCompany" placeholder="예: 영동식당" maxlength="25"></div>
+    <div class="field"><label>주요서비스 * <span class="helper">(50자 이내)</span></label><input id="enService" placeholder="예: 한식 · 단체예약 (50자 이내)" maxlength="50"></div>
+    <div class="field"><label>주소 *</label><input id="enAddress" placeholder="예: 서울 강남구 OO로 12 (50자 이내)" maxlength="50"></div>
     <button class="btn btn-accent btn-block" onclick="addEntry('${nid}')">등록하기</button>
   `);
 }
@@ -2385,6 +2399,7 @@ function addEntry(nid){
   const me = currentMember(); if(!me) return;
   const v = id => (document.getElementById(id).value || '').trim();
   const company = v('enCompany'), service = v('enService'), address = v('enAddress');
+  if(company.length > 25 || service.length > 50 || address.length > 50){ showToast('글자 수를 줄여주세요 (상호 25 · 서비스 50 · 주소 50자)'); return; }
   if(!company || !service || !address){ showToast('상호명 · 주요서비스 · 주소는 꼭 입력해주세요'); return; }
   if(!confirm('등록하면 본인이 수정·삭제할 수 없어요. 등록할까요?')) return;
   const id = uid();
