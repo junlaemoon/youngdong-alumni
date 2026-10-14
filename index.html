@@ -2383,10 +2383,17 @@ function openEntryModal(nid){
   if(!requireLogin()) return;
   const me = currentMember();
   const mine = (entryStore[nid] || []).filter(e => e.memberId === me.id).length;
-  if(mine >= 5){ showToast('한 공지에는 최대 5건까지 등록할 수 있어요'); return; }
+  if(!isAdmin() && mine >= 5){ showToast('한 공지에는 최대 5건까지 등록할 수 있어요'); return; }
   openModal('내 업체 등록', `
     <p class="helper">등록 후에는 <b>본인이 수정·삭제할 수 없어요.</b> 오탈자는 제출 전에 꼭 확인해주세요.</p>
-    <div class="card" style="background:#F7F8FA; font-size:13px;">기수·성함: <b>${me.batch ? esc(String(batchNumber(me.batch))) + '회 ' : ''}${esc(me.name)}</b> (내 정보로 자동 입력)</div>
+    ${isAdmin() ? `
+    <div class="card" style="background:#FFF8E6; font-size:13px;">
+      <b>관리자 대리 등록</b> — 다른 동문(또는 회원이 아닌 업체)을 대신 올릴 땐 아래에 기수·성함을 입력하세요. 비워두면 내 정보(${me.batch ? esc(String(batchNumber(me.batch))) + '회 ' : ''}${esc(me.name)})로 등록돼요.
+      <div style="display:flex; gap:8px; margin-top:8px;">
+        <input id="enBatch" type="number" min="1" placeholder="기수(숫자)" style="width:90px;">
+        <input id="enName" placeholder="성함" maxlength="20" style="flex:1;">
+      </div>
+    </div>` : `<div class="card" style="background:#F7F8FA; font-size:13px;">기수·성함: <b>${me.batch ? esc(String(batchNumber(me.batch))) + '회 ' : ''}${esc(me.name)}</b> (내 정보로 자동 입력)</div>`}
     <div class="field"><label>분류</label><input id="enCat" list="enCatList" placeholder="예: 식당 / 병원 / 법률 / 기타" maxlength="10">
       <datalist id="enCatList"><option value="식당"><option value="기타"><option value="병원·의료"><option value="법률·세무"><option value="제조·유통"><option value="IT·서비스"></datalist></div>
     <div class="field"><label>상호명 *</label><input id="enCompany" placeholder="예: 영동식당" maxlength="25"></div>
@@ -2401,11 +2408,16 @@ function addEntry(nid){
   const company = v('enCompany'), service = v('enService'), address = v('enAddress');
   if(company.length > 25 || service.length > 50 || address.length > 50){ showToast('글자 수를 줄여주세요 (상호 25 · 서비스 50 · 주소 50자)'); return; }
   if(!company || !service || !address){ showToast('상호명 · 주요서비스 · 주소는 꼭 입력해주세요'); return; }
-  if(!confirm('등록하면 본인이 수정·삭제할 수 없어요. 등록할까요?')) return;
+  if(!isAdmin() && !confirm('등록하면 본인이 수정·삭제할 수 없어요. 등록할까요?')) return;
   const id = uid();
+  let nm = me.name, bt = me.batch ? batchNumber(me.batch) : '', byAdmin = false;
+  if(isAdmin()){
+    const on = ((document.getElementById('enName')||{}).value || '').trim();
+    if(on){ nm = on; bt = Number((document.getElementById('enBatch')||{}).value) || ''; byAdmin = true; }
+  }
   db.collection('noticeEntries').doc(id).set({
     id, noticeId: nid, category: v('enCat'), company, service, address,
-    memberId: me.id, name: me.name, batch: me.batch ? batchNumber(me.batch) : '', createdAt: Date.now(),
+    memberId: me.id, name: nm, batch: bt, byAdmin, createdAt: Date.now(),
   }).then(() => { showToast('등록했어요'); }).catch(() => showToast('등록 실패, 다시 시도해주세요'));
   logActivity('업체 직접 등록', company);
   closeModal();
