@@ -490,6 +490,7 @@ async function savePosts(){ try{ await syncCollection('posts', state.posts); }ca
 // 로그인 세션은 이 브라우저(기기)에만 남기면 되므로 localStorage 사용
 // (Claude 아티팩트 미리보기 안에서는 정상 작동 안 할 수 있음 — Netlify 등 실제 배포 환경에서는 정상 동작)
 function saveSession(){
+  if(state.session) setTimeout(logVisit, 0);
   try{
     if(state.session) localStorage.setItem('rc_session', JSON.stringify(state.session));
     else localStorage.removeItem('rc_session');
@@ -541,8 +542,15 @@ async function init(){
     state.loaded = true;
     if(state.session) checkMyPromotions();
     renderAll();
+    logVisit();
   }
 
+  try{
+    db.collection('meta').doc('feedIntro').onSnapshot(d => {
+      state.feedIntro = d.exists ? (d.data().text || '') : '';
+      if(state.loaded && state.tab === 'feed' && !modalIsOpen()) renderApp();
+    }, () => {});
+  }catch(e){}
   attachLiveCollection('members', null, null, (arr) => {
     state.members = arr; ready.members = true;
     if(state.loaded) renderAll(); else runFirstTimeSetupIfReady();
@@ -758,6 +766,203 @@ async function logActivity(action, detail){
     if(state.activityLog.length > 50) state.activityLog.length = 50;
   }catch(e){ console.error(e); }
 }
+/* ---------------------------------------------------------
+   공통 유틸 / 이용 통계(방문·조회수) / 댓글(공지·모임)
+--------------------------------------------------------- */
+function esc(s){
+  return String(s == null ? '' : s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+}
+
+// 방문 기록: 같은 기기·같은 회원은 30분에 최대 1회만 기록 (쓰기 횟수 절약)
+function logVisit(){
+  const me = currentMember();
+  const now = Date.now();
+  const today = ymd(new Date());
+  const key = me ? 'rc_last_visit_' + me.id : 'rc_last_visit_anon';
+  let last = 0;
+  try{ last = Number(localStorage.getItem(key) || 0); }catch(e){}
+  if(now - last < 30*60*1000) return;
+  try{ localStorage.setItem(key, String(now)); }catch(e){}
+  const inc = firebase.firestore.FieldValue.increment(1);
+  const dailyRef = db.collection('visitDaily').doc(today);
+  if(!me){
+    dailyRef.set({ date: today, anonVisits: inc }, { merge: true }).catch(()=>{});
+    return;
+  }
+  const dayRef = db.collection('visitLog').doc(me.id + '_' + today);
+  const totalRef = db.collection('visitTotals').doc(me.id);
+  db.runTransaction(async (tx) => {
+    const snap = await tx.get(dayRef);
+    if(!snap.exists){
+      tx.set(dayRef, { memberId: me.id, date: today, count: 1, firstAt: now, lastAt: now });
+      tx.set(dailyRef, { date: today, visitors: inc, visits: inc }, { merge: true });
+    } else {
+      tx.update(dayRef, { count: inc, lastAt: now });
+      tx.set(dailyRef, { date: today, visits: inc }, { merge: true });
+    }
+    tx.set(totalRef, { memberId: me.id, count: inc, lastAt: now, lastDate: today }, { merge: true });
+  }).catch(e => console.error('[visit]', e));
+}
+
+// 게시물 조회수: 같은 기기에서 같은 글은 하루 1회만 집계, 관리자 본인 조회는 제외
+function trackView(type, id){
+  if(isAdmin()) return;
+  const key = type + '_' + id;
+  const today = ymd(new Date());
+  let seen = {};
+  try{ seen = JSON.parse(localStorage.getItem('rc_viewed') || '{}'); }catch(e){}
+  if(seen[key] === today) return;
+  Object.keys(seen).forEach(k => { if(seen[k] !== today) delete seen[k]; });
+  seen[key] = today;
+  try{ localStorage.setItem('rc_viewed', JSON.stringify(seen)); }catch(e){}
+  db.collection('viewCounts').doc(key).set({ type, itemId: id, count: firebase.firestore.FieldValue.increment(1), lastAt: Date.now() }, { merge: true }).catch(()=>{});
+}
+
+const VIEW_TYPE_LABEL = { notice: '공지', post: '소식', meetup: '모임' };
+function statRow(cells, opts){
+  opts = opts || {};
+  const cols = opts.cols || cells.map(() => '1fr').join(' ');
+  const style = `display:grid; grid-template-columns:${cols}; gap:6px; align-items:center; padding:8px 4px; border-bottom:1px solid var(--line); font-size:${opts.head ? '11px' : '12.5px'};${opts.head ? ' font-weight:700; color:var(--ink-soft);' : ''}${opts.onclick ? ' cursor:pointer;' : ''}`;
+  return `<div style="${style}"${opts.onclick ? ` onclick="${opts.onclick}"` : ''}>${cells.map(c => `<span>${c}</span>`).join('')}</div>`;
+}
+function openStatsModal(tab){
+  if(!isAdmin()) return;
+  tab = tab || 'daily';
+  const btn = (id, label) => `<button class="btn ${tab===id ? 'btn-primary' : 'btn-ghost'} btn-sm" onclick="openStatsModal('${id}')">${label}</button>`;
+  openModal('이용 통계', `
+    <div style="display:flex; gap:6px; margin-bottom:12px;">${btn('daily','일별 방문')}${btn('views','조회수')}${btn('people','회원별')}</div>
+    <div id="statsBody"><p class="helper">불러오는 중…</p></div>
+  `, true);
+  loadStatsBody(tab);
+}
+async function loadStatsBody(tab){
+  const body = () => document.getElementById('statsBody');
+  const fail = (e) => { console.error(e); if(body()) body().innerHTML = '<p class="helper">통계를 불러오지 못했어요. Firestore 보안규칙에 통계용 컬렉션이 추가됐는지 확인해주세요.</p>'; };
+  try{
+    if(tab === 'daily'){
+      const snap = await db.collection('visitDaily').orderBy('date', 'desc').limit(30).get();
+      const rows = snap.docs.map(d => d.data());
+      const today = ymd(new Date());
+      const t = rows.find(r => r.date === today) || {};
+      const sumVisits = rows.reduce((s, r) => s + (r.visits || 0), 0);
+      if(!body()) return;
+      body().innerHTML = `
+        <div class="card" style="display:grid; grid-template-columns:1fr 1fr 1fr; gap:10px; text-align:center;">
+          <div><div class="disp" style="font-size:20px; font-weight:800;">${t.visitors || 0}</div><div class="req-sub">오늘 방문 회원</div></div>
+          <div><div class="disp" style="font-size:20px; font-weight:800;">${t.visits || 0}</div><div class="req-sub">오늘 방문 횟수</div></div>
+          <div><div class="disp" style="font-size:20px; font-weight:800;">${sumVisits}</div><div class="req-sub">최근30일 방문횟수</div></div>
+        </div>
+        <p class="helper">방문 = 같은 기기에서 30분 이상 간격으로 접속한 횟수예요. 비로그인은 기기 기준이라 정확한 인원이 아니에요.</p>
+        ${statRow(['날짜','방문 회원','방문 횟수','비로그인'], { head: true, cols: '1.3fr 1fr 1fr 1fr' })}
+        ${rows.length ? rows.map(r => statRow([esc(r.date), (r.visitors||0)+'명', (r.visits||0)+'회', (r.anonVisits||0)+'회'], { cols: '1.3fr 1fr 1fr 1fr' })).join('') : '<p class="helper">아직 기록이 없어요</p>'}
+      `;
+    } else if(tab === 'views'){
+      const snap = await db.collection('viewCounts').orderBy('count', 'desc').limit(50).get();
+      const rows = snap.docs.map(d => d.data());
+      if(!body()) return;
+      body().innerHTML = `
+        <p class="helper">같은 기기에서 같은 글은 하루 1회만 집계돼요. 관리자 본인 조회는 제외돼요. (상위 50개)</p>
+        ${statRow(['구분','제목','조회수'], { head: true, cols: '0.6fr 2.4fr 0.8fr' })}
+        ${rows.length ? rows.map(r => {
+          const list = r.type === 'notice' ? state.notices : r.type === 'post' ? state.posts : state.meetups;
+          const item = list.find(x => x.id === r.itemId);
+          const title = item ? esc(item.title || '(제목없음)') : '(삭제되었거나 오래된 항목)';
+          return statRow([VIEW_TYPE_LABEL[r.type] || '-', title, (r.count||0)+'회'], { cols: '0.6fr 2.4fr 0.8fr' });
+        }).join('') : '<p class="helper">아직 기록이 없어요</p>'}
+      `;
+    } else {
+      const snap = await db.collection('visitTotals').orderBy('count', 'desc').limit(100).get();
+      const rows = snap.docs.map(d => d.data());
+      if(!body()) return;
+      body().innerHTML = `
+        <p class="helper">방문 횟수 상위 100명이에요. 이름을 누르면 날짜별 방문기록을 볼 수 있어요.</p>
+        ${statRow(['회원','방문','마지막 방문'], { head: true, cols: '1.6fr 0.8fr 1.1fr' })}
+        ${rows.length ? rows.map(r => {
+          const m = state.members.find(x => x.id === r.memberId);
+          const name = m ? esc(m.name) + (m.batch ? ' · ' + esc(displayBatch(m.batch)) : '') : '(탈퇴회원)';
+          return statRow([name, (r.count||0)+'회', esc(r.lastDate || '-')], { cols: '1.6fr 0.8fr 1.1fr', onclick: `openPersonVisitsModal('${r.memberId}')` });
+        }).join('') : '<p class="helper">아직 기록이 없어요</p>'}
+      `;
+    }
+  }catch(e){ fail(e); }
+}
+async function openPersonVisitsModal(memberId){
+  if(!isAdmin()) return;
+  const m = state.members.find(x => x.id === memberId);
+  openModal(`${m ? esc(m.name) : '회원'} 방문기록`, `<div id="personBody"><p class="helper">불러오는 중…</p></div>`, true);
+  try{
+    const FP = firebase.firestore.FieldPath.documentId();
+    const snap = await db.collection('visitLog')
+      .where(FP, '>=', memberId + '_').where(FP, '<', memberId + '_\uf8ff')
+      .orderBy(FP, 'desc').limit(120).get();
+    const rows = snap.docs.map(d => d.data());
+    const t = ts => ts ? new Date(ts).toLocaleTimeString('ko-KR', { hour: '2-digit', minute: '2-digit' }) : '-';
+    const total = rows.reduce((s, r) => s + (r.count || 0), 0);
+    const el = document.getElementById('personBody');
+    if(!el) return;
+    el.innerHTML = `
+      <p class="helper">방문한 날 ${rows.length}일 · 총 ${total}회${rows.length >= 120 ? ' (최근 120일까지 표시)' : ''}</p>
+      ${statRow(['날짜','횟수','첫 접속 ~ 마지막'], { head: true, cols: '1.2fr 0.6fr 1.6fr' })}
+      ${rows.length ? rows.map(r => statRow([esc(r.date), (r.count||0)+'회', t(r.firstAt)+' ~ '+t(r.lastAt)], { cols: '1.2fr 0.6fr 1.6fr' })).join('') : '<p class="helper">방문 기록이 없어요</p>'}
+    `;
+  }catch(e){
+    console.error(e);
+    const el = document.getElementById('personBody');
+    if(el) el.innerHTML = '<p class="helper">기록을 불러오지 못했어요.</p>';
+  }
+}
+
+/* 댓글 (공지·모임용 — 소식은 기존 방식 유지). 글 문서를 건드리지 않도록 별도 컬렉션에 저장 */
+function stopCommentsListener(){
+  if(window._cUnsub){ try{ window._cUnsub(); }catch(e){} window._cUnsub = null; }
+}
+function commentsSectionHtml(type, id){
+  const me = currentMember();
+  return `
+    <div class="section-title" style="margin-top:16px;">댓글</div>
+    <div id="cmtList-${type}-${id}"><p class="helper">불러오는 중…</p></div>
+    ${me ? `<div class="comment-form">
+      <input id="cmtInput-${type}-${id}" placeholder="댓글을 남겨보세요" maxlength="500">
+      <button class="btn btn-ghost btn-sm" onclick="addTargetComment('${type}','${id}')">등록</button>
+    </div>` : `<p class="helper">댓글은 로그인 후 남길 수 있어요.</p>`}
+  `;
+}
+function startCommentsListener(type, id){
+  stopCommentsListener();
+  window._cUnsub = db.collection('comments').where('targetKey', '==', type + '_' + id).onSnapshot(snap => {
+    const me = currentMember();
+    const arr = snap.docs.map(d => ({ id: d.id, ...d.data() })).sort((a, b) => a.createdAt - b.createdAt);
+    const el = document.getElementById(`cmtList-${type}-${id}`);
+    if(!el) return;
+    el.innerHTML = arr.length ? `<div class="comment-list">${arr.map(c => `
+      <div class="comment-item">
+        <span class="comment-author">${esc(memberDisplayName(c.authorId, c.authorName))}</span>${esc(c.content)}
+        <span class="req-sub" style="margin-left:6px;">${fmtTimeAgo(c.createdAt)}</span>
+        ${(me && (me.id === c.authorId || isAdmin())) ? `<button class="link-btn" style="margin-left:6px; color:var(--coral);" onclick="deleteTargetComment('${c.id}')">삭제</button>` : ''}
+      </div>`).join('')}</div>` : '<p class="helper">첫 댓글을 남겨보세요</p>';
+  }, err => {
+    console.error(err);
+    const el = document.getElementById(`cmtList-${type}-${id}`);
+    if(el) el.innerHTML = '<p class="helper">댓글을 불러오지 못했어요.</p>';
+  });
+}
+function addTargetComment(type, id){
+  if(!requireLogin()) return;
+  const input = document.getElementById(`cmtInput-${type}-${id}`);
+  const content = ((input && input.value) || '').trim();
+  if(!content) return;
+  if(content.length > 500){ showToast('댓글은 500자까지 쓸 수 있어요'); return; }
+  const me = currentMember();
+  const cid = uid();
+  input.value = '';
+  db.collection('comments').doc(cid).set({ id: cid, targetKey: type + '_' + id, targetType: type, targetId: id, authorId: me.id, authorName: me.name, content, createdAt: Date.now() })
+    .catch(e => { console.error(e); showToast('댓글 등록에 실패했어요'); });
+}
+function deleteTargetComment(cid){
+  if(!confirm('댓글을 삭제할까요?')) return;
+  db.collection('comments').doc(cid).delete().catch(e => { console.error(e); showToast('삭제에 실패했어요'); });
+}
+
 function openActivityLogModal(){
   const rows = state.activityLog || [];
   openModal('관리자 활동 로그', `
@@ -893,7 +1098,7 @@ function exportYearlyReport(){
 function addNotice(title, content){
   if(!title.trim() || !content.trim()){ showToast('제목과 내용을 입력해주세요'); return; }
   const me = currentMember();
-  state.notices.unshift({ id: uid(), title: title.trim(), content: content.trim(), author: me.name, authorId: me.id, date: ymd(new Date()) });
+  state.notices.unshift({ id: uid(), title: title.trim(), content: content.trim(), author: me.name, authorId: me.id, date: ymd(new Date()), createdAt: Date.now() });
   saveNotices();
   closeModal();
   renderAll();
@@ -1332,8 +1537,16 @@ function fmtTimeAgo(ts){
 /* ---------------------------------------------------------
    모달
 --------------------------------------------------------- */
-function closeModal(){ document.getElementById('modal-root').innerHTML = ''; }
+let histM = false, pendingBack = false;
+function modalIsOpen(){ return !!document.getElementById('modal-root').innerHTML.trim(); }
+function closeModal(){
+  stopCommentsListener();
+  document.getElementById('modal-root').innerHTML = '';
+  if(histM && !pendingBack && history.state && history.state.m){ pendingBack = true; history.back(); }
+}
 function openModal(title, bodyHtml, closeOnBackdrop){
+  stopCommentsListener();
+  if(!histM && !pendingBack){ try{ history.pushState({m:1}, ''); histM = true; }catch(e){} }
   document.getElementById('modal-root').innerHTML = `
     <div class="modal-backdrop" ${closeOnBackdrop ? `onclick="if(event.target===this) closeModal()"` : ''}>
       <div class="modal-sheet">
@@ -1351,6 +1564,8 @@ function openPolicyModal(){
       동문 본인 확인, 모임 신청·출석 관리, 동문 간 연락처 공유(상호 동의 시), PIN 분실 시 본인확인.</p>
       <p><b style="color:var(--ink);">3. 연락처 공개 범위</b><br>
       휴대폰번호는 본인이 요청을 수락한 동문에게만 공개됩니다. 플랫폼관리자 및 위임받은 운영진은 운영 목적상 열람 권한을 가집니다.</p>
+      <p><b style="color:var(--ink);">이용기록</b><br>
+      서비스 운영과 개선을 위해 방문 일시·횟수와 게시물 조회 수가 기록되며, 관리자만 열람할 수 있습니다.</p>
       <p><b style="color:var(--ink);">4. 보관 및 파기</b><br>
       회원 탈퇴(제외) 시 관련 정보는 삭제됩니다. 별도 요청 시 운영진에게 정보 삭제를 요청할 수 있습니다.</p>
       <p><b style="color:var(--ink);">5. 문의</b><br>
@@ -1632,7 +1847,7 @@ function openMemberProfileModal(memberId){
       ${m.intro ? `<p class="profile-phone" style="margin-top:2px;">${m.intro}</p>` : ''}
       <div class="tag-row">
         <span class="pill">가입일 ${m.joinedAt}</span>
-        <span class="pill">${m.role==='admin' ? '플랫폼관리자' : '동문'}</span>
+        <span class="pill">${m.role==='admin' ? '플랫폼관리자' : '동문'}</span>${m.isCreator ? '<span class="pill" style="background:#B8860B; color:#fff;">🛠 플랫폼 제작자</span>' : ''}
       </div>
     </div>
   `+`
@@ -1725,10 +1940,11 @@ function getMemberLastSeen(){
 }
 function collectMemberNotifications(){
   const me = currentMember();
-  if(!me) return { newMeetups: [], newPosts: [], rescheduled: [], upcoming: [], invites: [] };
+  if(!me) return { newMeetups: [], newPosts: [], newNotices: [], rescheduled: [], upcoming: [], invites: [] };
   const since = getMemberLastSeen();
   const newMeetups = state.meetups.filter(mt => mt.status === 'approved' && mt.createdAt > since);
   const newPosts = state.posts.filter(p => p.createdAt > since);
+  const newNotices = state.notices.filter(n => n.createdAt && n.createdAt > since);
   const myMeetupIds = new Set(state.meetups.filter(mt => mt.participants.some(p => p.memberId === me.id && p.status === 'confirmed')).map(mt => mt.id));
   const rescheduled = state.meetups.filter(mt => myMeetupIds.has(mt.id) && mt.rescheduledAt && mt.rescheduledAt > since);
   const todayStr = ymd(new Date());
@@ -1740,15 +1956,15 @@ function collectMemberNotifications(){
     if(days >= 0 && days <= 7) upcoming.push(mt);
   });
   const invites = state.meetups.filter(mt => mt.participants.some(p => p.memberId === me.id && p.status === 'invited'));
-  return { newMeetups, newPosts, rescheduled, upcoming, invites };
+  return { newMeetups, newPosts, newNotices, rescheduled, upcoming, invites };
 }
 function renderMemberBell(){
   const el = document.getElementById('memberBell');
   if(!el) return;
   const me = currentMember();
   if(!me || isAdmin()){ el.innerHTML = ''; return; } // 관리자는 별도 관리자 알림벨을 씀
-  const { newMeetups, newPosts, rescheduled, upcoming, invites } = collectMemberNotifications();
-  const total = newMeetups.length + newPosts.length + rescheduled.length + upcoming.length + invites.length;
+  const { newMeetups, newPosts, newNotices, rescheduled, upcoming, invites } = collectMemberNotifications();
+  const total = newMeetups.length + newPosts.length + newNotices.length + rescheduled.length + upcoming.length + invites.length;
   el.innerHTML = `
     <div class="admin-bell" onclick="openMemberNotificationsModal()">
       🔔${total > 0 ? `<span class="badge-count">${total > 99 ? '99+' : total}</span>` : ''}
@@ -1756,14 +1972,15 @@ function renderMemberBell(){
   `;
 }
 function openMemberNotificationsModal(){
-  const { newMeetups, newPosts, rescheduled, upcoming, invites } = collectMemberNotifications();
+  const { newMeetups, newPosts, newNotices, rescheduled, upcoming, invites } = collectMemberNotifications();
   const section = (title, items, renderItem) => items.length ? `
     <div class="section-title">${title} (${items.length})</div>
     ${items.map(renderItem).join('')}
   ` : '';
   openModal('알림', `
-    ${(newMeetups.length+newPosts.length+rescheduled.length+upcoming.length+invites.length)===0 ? '<div class="empty">새로운 알림이 없어요</div>' : ''}
+    ${(newMeetups.length+newPosts.length+newNotices.length+rescheduled.length+upcoming.length+invites.length)===0 ? '<div class="empty">새로운 알림이 없어요</div>' : ''}
     ${section('받은 모임 초대', invites, mt => `<div class="req-row" style="cursor:pointer;" onclick="closeModal(); openMeetupDetailModal('${mt.id}')"><span class="req-name">📩 ${mt.title}</span><span class="req-sub">${fmtDateKR(mt.date)} · 수락/거절하기</span></div>`)}
+    ${section('새 공지', newNotices, n => `<div class="req-row" style="cursor:pointer;" onclick="closeModal(); openNoticeDetailModal('${n.id}')"><span class="req-name">${esc(n.title)}</span><span class="req-sub">${fmtTimeAgo(n.createdAt)}</span></div>`)}
     ${section('새 모임', newMeetups, mt => `<div class="req-row" style="cursor:pointer;" onclick="closeModal(); openMeetupDetailModal('${mt.id}')"><span class="req-name">${mt.title}</span><span class="req-sub">${fmtDateKR(mt.date)}</span></div>`)}
     ${section('새 소식', newPosts, p => `<div class="req-row" style="cursor:pointer;" onclick="closeModal(); openPostDetailModal('${p.id}')"><span class="req-name">${p.title||'(제목없음)'}</span><span class="req-sub">${fmtTimeAgo(p.createdAt)}</span></div>`)}
     ${section('일정 변경 (참가중인 모임)', rescheduled, mt => `<div class="req-row" style="cursor:pointer;" onclick="closeModal(); openMeetupDetailModal('${mt.id}')"><span class="req-name">${mt.title}</span><span class="req-sub">${fmtDateKR(mt.date)} ${mt.time}로 변경됨</span></div>`)}
@@ -1797,6 +2014,29 @@ function renderTabs(){
   ).join('');
 }
 function switchTab(id){ state.tab = id; renderApp(); renderTabs(); }
+/* 모바일 뒤로가기: 앱 밖으로 나가지 않고 모달 닫기 → 첫 탭으로 → 종료 확인 */
+(function setupBackButton(){
+  try{ history.replaceState({base:1}, ''); history.pushState({app:1}, ''); }catch(e){ return; }
+  window.addEventListener('popstate', (e) => {
+    const st = e.state || {};
+    if(pendingBack){
+      pendingBack = false; histM = false;
+      if(modalIsOpen()){ try{ history.pushState({m:1}, ''); histM = true; }catch(err){} }
+      return;
+    }
+    if(histM){ histM = false; }
+    if(modalIsOpen()){
+      stopCommentsListener(); document.getElementById('modal-root').innerHTML = '';
+      if(st.base){ try{ history.pushState({app:1}, ''); }catch(err){} }
+      return;
+    }
+    if(st.base){
+      if(state.tab !== 'notice'){ switchTab('notice'); try{ history.pushState({app:1}, ''); }catch(err){} return; }
+      if(confirm('종료하시겠습니까?')){ history.back(); }
+      else { try{ history.pushState({app:1}, ''); }catch(err){} }
+    }
+  });
+})();
 
 /* ---------------------------------------------------------
    렌더 - 탭별 화면
@@ -1833,7 +2073,9 @@ function noticeCardCompact(n){
 function openNoticeDetailModal(id){
   const n = state.notices.find(x=>x.id===id);
   if(!n) return;
-  openModal('공지', noticeCardFull(n), true);
+  trackView('notice', id);
+  openModal('공지', noticeCardFull(n) + commentsSectionHtml('notice', id), true);
+  startCommentsListener('notice', id);
 }
 function renderNoticeList(){
   const q = (state.noticeSearch||'').trim().toLowerCase();
@@ -1877,7 +2119,7 @@ function postCardFull(p){
       </div>
       ${p.comments.length ? `
         <div class="comment-list">
-          ${p.comments.map(c => `<div class="comment-item"><span class="comment-author">${memberDisplayName(c.authorId, c.authorName)}</span>${c.content}</div>`).join('')}
+          ${p.comments.map(c => `<div class="comment-item"><span class="comment-author">${esc(memberDisplayName(c.authorId, c.authorName))}</span>${esc(c.content)}</div>`).join('')}
         </div>
       ` : ''}
       <div class="comment-form">
@@ -1901,6 +2143,7 @@ function postCardCompact(p){
 function openPostDetailModal(id){
   const p = state.posts.find(x=>x.id===id);
   if(!p) return;
+  trackView('post', id);
   openModal('소식', postCardFull(p), true);
 }
 function renderFeedList(){
@@ -1915,8 +2158,16 @@ function onFeedSearch(v){
   const el = document.getElementById('feedListArea');
   if(el) el.innerHTML = renderFeedList();
 }
+const DEFAULT_FEED_INTRO = '동문들의 근황과 이야기를 나누는 공간이에요. 서로 존중하며 따뜻한 소식을 남겨주세요.';
 function renderFeedTab(){
+  const intro = (state.feedIntro || DEFAULT_FEED_INTRO);
   return `
+    <div class="card" style="margin-bottom:12px; background:#F4F8FF; border:1px solid #DCE6F7;">
+      <div style="display:flex; gap:8px; align-items:flex-start;">
+        <div style="flex:1; font-size:13px; line-height:1.6; color:var(--ink-soft); white-space:pre-wrap;">📌 ${esc(intro)}</div>
+        ${isAdmin() ? `<button class="btn btn-ghost" style="padding:4px 10px; font-size:12px;" onclick="openFeedIntroModal()">수정</button>` : ''}
+      </div>
+    </div>
     ${hasPerm('feed') ? `<button class="btn btn-primary btn-block" onclick="openPostModal()">+ 소식 남기기</button>` : ''}
     <div class="field" style="margin-top:12px;"><input id="feedSearchInput" placeholder="🔍 소식 제목·내용 검색" value="${state.feedSearch||''}" oninput="onFeedSearch(this.value)"></div>
     <div class="section-title">동문 소식</div>
@@ -2048,7 +2299,9 @@ function meetupCardCompact(mt){
 function openMeetupDetailModal(id){
   const mt = state.meetups.find(m => m.id === id);
   if(!mt) return;
-  openModal('모임 상세', meetupCard(mt), true);
+  trackView('meetup', id);
+  openModal('모임 상세', meetupCard(mt) + commentsSectionHtml('meetup', id), true);
+  startCommentsListener('meetup', id);
 }
 function visibleMeetups(){
   const me = currentMember();
@@ -2076,11 +2329,41 @@ function renderScheduleTab(){
   `;
 }
 
+function setCreator(id){
+  if(!isAdmin()) return;
+  const target = state.members.find(x => x.id === id);
+  if(!target) return;
+  const makeOn = !target.isCreator;
+  state.members.forEach(m => { if(m.isCreator) m.isCreator = false; }); // 제작자는 한 명만
+  if(makeOn) target.isCreator = true;
+  saveMembers();
+  logActivity('제작자 표시', `${target.name} · ${makeOn ? '지정' : '해제'}`);
+  showToast(makeOn ? `${target.name}님을 플랫폼 제작자로 표시했어요` : '제작자 표시를 해제했어요');
+  renderAll();
+}
+function openFeedIntroModal(){
+  if(!isAdmin()) return;
+  openModal('소식 안내 문구', `
+    <p class="helper">소식 탭 상단에 항상 보이는 짧은 안내 문구예요.</p>
+    <div class="field"><textarea id="feedIntroInput" rows="4" maxlength="200">${esc(state.feedIntro || DEFAULT_FEED_INTRO)}</textarea></div>
+    <button class="btn btn-accent btn-block" onclick="saveFeedIntro()">저장</button>
+  `);
+}
+function saveFeedIntro(){
+  const v = document.getElementById('feedIntroInput').value.trim();
+  state.feedIntro = v;
+  db.collection('meta').doc('feedIntro').set({ text: v }).catch(()=>{});
+  logActivity('소식 안내 문구 수정', v.slice(0,30));
+  closeModal(); showToast('저장했어요'); renderApp();
+}
+const TITLE_PRESETS = ['총동문회장','사무총장','이사','총무'];
+function pickTitlePreset(t){ document.getElementById('titleInput').value = t; }
 function openTitleModal(memberId){
   const m = state.members.find(x=>x.id===memberId);
   if(!m) return;
   openModal('직함 설정', `
     <p class="helper">동문회 내 직함을 입력해주세요 (예: 총동문회장, 사무총장, OO기 총무). 비워두면 표시되지 않아요.</p>
+    <div style="display:flex; flex-wrap:wrap; gap:6px; margin-bottom:10px;">${TITLE_PRESETS.map(t=>`<button type="button" class="btn btn-ghost" style="padding:6px 12px; font-size:12.5px;" onclick="pickTitlePreset('${t}')">${t}</button>`).join('')}</div>
     <div class="field"><input id="titleInput" value="${(m.title||'').replace(/"/g,'&quot;')}" placeholder="예: 총동문회장"></div>
     <button class="btn btn-accent btn-block" onclick="saveTitleFor('${memberId}')">저장</button>
   `);
@@ -2143,10 +2426,14 @@ function renderMemberList(){
   return list.map(m => `
         <div class="member-row">
           <span style="cursor:pointer;" onclick="openMemberProfileModal('${m.id}')">
-            <span class="member-name">${m.name}${m.batch ? ` · ${displayBatch(m.batch)}` : ''}${m.title ? `<span class="role-badge" style="background:var(--river);">${m.title}</span>` : ''}${m.role==='admin' ? '<span class="role-badge">플랫폼관리자</span>' : ''}</span>
+            <span class="member-name">${m.name}${m.batch ? ` · ${displayBatch(m.batch)}` : ''}${m.title ? `<span class="role-badge" style="background:var(--river);">${m.title}</span>` : ''}${m.role==='admin' ? '<span class="role-badge">플랫폼관리자</span>' : ''}${m.isCreator ? '<span class="role-badge" style="background:#B8860B;">🛠 플랫폼 제작자</span>' : ''}</span>
             ${m.intro ? `<div class="req-sub" style="margin-top:2px;">${m.intro}</div>` : ''}
           </span>
           <span class="member-actions">
+            ${admin && me.id === m.id ? `
+              <button class="btn btn-ghost btn-sm" onclick="openTitleModal('${m.id}')">내 직함 설정</button>
+            ` : ''}
+            ${admin ? `<button class="btn btn-ghost btn-sm" onclick="setCreator('${m.id}')">${m.isCreator ? '제작자 표시 해제' : '제작자로 표시'}</button>` : ''}
             ${admin && me.id !== m.id ? `
               <button class="btn btn-ghost btn-sm" onclick="toggleRole('${m.id}')">${m.role==='admin'?'플랫폼관리자 해제':'플랫폼관리자 지정'}</button>
               <button class="btn btn-ghost btn-sm" onclick="openTitleModal('${m.id}')">직함 설정</button>
@@ -2212,6 +2499,7 @@ function renderMembersTab(){
     ${pendingCount ? `<button class="btn btn-accent btn-block" onclick="openPendingMeetupsModal()">🕓 승인 대기 모임 (${pendingCount})</button>` : ''}
     <button class="btn btn-ghost btn-block" onclick="exportYearlyReport()">📊 연간 리포트 엑셀 다운로드</button>
     <button class="btn btn-ghost btn-block" onclick="exportAllData()">⬇ 전체 데이터 백업(내보내기)</button>
+    <button class="btn btn-accent btn-block" onclick="openStatsModal()">📈 이용 통계 (방문·조회수·회원별)</button>
     <button class="btn btn-ghost btn-block" onclick="openActivityLogModal()">🗒 관리자 활동 로그 보기</button>
     <button class="btn btn-ghost btn-block" onclick="openReportsModal()">🚩 신고 내역 보기${state.reports && state.reports.filter(r=>!r.resolved).length ? ` (${state.reports.filter(r=>!r.resolved).length})` : ''}</button>
     ` : ''}
@@ -2260,12 +2548,12 @@ function renderMyTab(){
 
   return `
     <div class="profile-card">
-      <p class="profile-name">${me.name}${me.batch ? ` · ${displayBatch(me.batch)}` : ''}${me.role==='admin' ? ' 🏅' : ''}</p>
+      <p class="profile-name">${me.name}${me.batch ? ` · ${displayBatch(me.batch)}` : ''}${me.title ? ` · ${me.title}` : ''}${me.role==='admin' ? ' 🏅' : ''}</p>
       ${me.intro ? `<p class="profile-phone" style="margin-top:2px;">${me.intro}</p>` : ''}
       <p class="profile-phone">내 연락처: ${maskPhone(me.phone)} (수락한 동문에게만 공개돼요)</p>
       <div class="tag-row">
         <span class="pill">가입일 ${me.joinedAt}</span>
-        <span class="pill">${me.role==='admin' ? '플랫폼관리자' : '동문'}</span>
+        <span class="pill">${me.role==='admin' ? '플랫폼관리자' : '동문'}</span>${me.isCreator ? '<span class="pill" style="background:#B8860B; color:#fff;">🛠 플랫폼 제작자</span>' : ''}
       </div>
     </div>
     <button class="btn btn-ghost btn-block" onclick="openEditProfileModal()">내 정보 수정</button>
