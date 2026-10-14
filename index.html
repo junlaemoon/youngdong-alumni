@@ -1218,8 +1218,14 @@ function addMeetup(data){
   renderAll();
 }
 function deleteMeetup(id){
+  const mt0 = state.meetups.find(mt => mt.id === id); if(!mt0) return;
+  const past = mt0.date < ymd(new Date());
+  if(!confirm(`'${mt0.title}' 모임을 삭제할까요?${past ? '\n지난 모임을 지우면 참석 기록과 연말 통계에서도 빠져요.' : '\n신청한 참가자 정보도 함께 지워져요.'}`)) return;
   state.meetups = state.meetups.filter(mt => mt.id !== id);
   saveMeetups();
+  logActivity('모임 삭제', mt0.title);
+  closeModal();
+  showToast('모임을 삭제했어요');
   renderAll();
 }
 function approveMeetup(id){
@@ -3054,8 +3060,9 @@ function meetupCard(mt){
     else if(!eligible) actions = `<span class="helper" style="margin:0;">"${TIER_LABEL[mt.requiredTier]} 이상"만 신청 가능해요</span>`;
     else if(groups.length) actions = `<button class="btn btn-accent btn-sm" onclick="openJoinModal('${mt.id}')">${full ? '대기 신청' : '참여 신청'}</button>`;
     else actions = `<button class="btn btn-accent btn-sm" onclick="joinMeetup('${mt.id}', null)">${full ? '대기 신청' : '참여 신청'}</button>`;
-    if(isHost || isAdmin()) actions += `<button class="btn btn-ghost btn-sm" onclick="openEditMeetupModal('${mt.id}')">수정</button><button class="btn btn-ghost btn-sm" onclick="deleteMeetup('${mt.id}')">삭제</button>`;
   }
+  // 수정·삭제: 모임 상태(심사중·진행중·지난 모임)와 상관없이 주최자와 관리자에게 보임
+  if(isHost || isAdmin()) actions += `<button class="btn btn-ghost btn-sm" onclick="openEditMeetupModal('${mt.id}')">수정</button><button class="btn btn-ghost btn-sm" onclick="deleteMeetup('${mt.id}')">삭제</button>`;
 
   return `
     <div class="meetup">
