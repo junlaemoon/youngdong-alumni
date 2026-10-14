@@ -279,6 +279,21 @@ main#app{padding:16px 16px 4px;}
 .rt-content th,.rt-content td{border:1px solid #CBD5E1; padding:6px 8px; min-width:48px; vertical-align:top; font-size:13px;}
 .rt-content th{background:#F1F5F9; font-weight:700;}
 .rt-wrap{overflow-x:auto; margin:6px 0;}
+
+/* PC 와이드 레이아웃 */
+@media (min-width: 900px){
+  .shell{max-width:1120px;}
+  main#app{padding:20px 28px 4px;}
+  .tabs{margin:12px 28px 0;}
+  .tab-btn{font-size:14.5px; padding:12px 6px;}
+  .modal-backdrop{align-items:center;}
+  .modal-sheet{max-width:780px; border-radius:20px; max-height:90vh; padding:24px 28px 28px;}
+  #noticeListArea, #feedListArea{display:grid; grid-template-columns:1fr 1fr; gap:0 14px; align-items:start;}
+  #noticeListArea > .card, #feedListArea > .card, #noticeListArea > .empty, #feedListArea > .empty{grid-column:1 / -1;}
+  .rt-area{max-height:52vh;}
+}
+.rt-content td.rt-sel, .rt-content th.rt-sel{outline:2px solid #2563EB; outline-offset:-2px;}
+.rt-area table{table-layout:auto;}
 </style>
 </head>
 <body>
@@ -1595,6 +1610,7 @@ function openModal(title, bodyHtml, closeOnBackdrop){
         ${bodyHtml}
       </div>
     </div>`;
+  startEntriesListeners();
 }
 function openPolicyModal(){
   openModal('이용약관 · 개인정보처리방침', `
@@ -2197,6 +2213,56 @@ function rtTableOp(op){
   else if(op === 'delCol'){ if(row.cells.length <= 1) table.remove(); else [...table.rows].forEach(r => { if(r.cells[idx]) r.cells[idx].remove(); }); }
   else if(op === 'delTable'){ table.remove(); }
 }
+/* 표 칸 너비 조절: PC는 칸 경계를 드래그, 폰/PC 공통으로 열너비 버튼 */
+function rtColCells(cell){
+  const table = cell.closest('table'); const idx = cell.cellIndex;
+  return [...table.rows].map(r => r.cells[idx]).filter(Boolean);
+}
+function rtSetColWidth(cell, w){
+  w = Math.max(30, Math.round(w));
+  rtColCells(cell).forEach(c => { c.style.width = w + 'px'; });
+}
+function rtColWidth(delta){
+  const cell = rtCell(); if(!cell){ showToast('표 안의 칸을 먼저 눌러주세요'); return; }
+  rtSetColWidth(cell, cell.offsetWidth + delta);
+}
+function rtMerge(dir){
+  const c = rtCell(); if(!c){ showToast('표 안의 칸을 먼저 눌러주세요'); return; }
+  const txt = n => (n.textContent || '').trim();
+  if(dir === 'right'){
+    const nx = c.nextElementSibling;
+    if(!nx){ showToast('오른쪽에 합칠 칸이 없어요'); return; }
+    if(txt(nx)) c.innerHTML = (txt(c) ? c.innerHTML + ' ' : '') + nx.innerHTML;
+    c.colSpan = (c.colSpan||1) + (nx.colSpan||1); nx.remove();
+  } else {
+    const nr = c.parentElement.nextElementSibling; const t = nr && nr.cells[c.cellIndex];
+    if(!t || (t.colSpan||1) !== (c.colSpan||1)){ showToast('아래에 합칠 칸이 없어요'); return; }
+    if(txt(t)) c.innerHTML = (txt(c) ? c.innerHTML + ' ' : '') + t.innerHTML;
+    c.rowSpan = (c.rowSpan||1) + (t.rowSpan||1); t.remove();
+  }
+}
+(function rtDragResize(){
+  let drag = null;
+  function edgeCell(e){
+    const a = document.querySelector('.rt-area'); if(!a || !a.contains(e.target)) return null;
+    const c = e.target.closest && e.target.closest('td,th'); if(!c) return null;
+    const r = c.getBoundingClientRect();
+    return (r.right - e.clientX <= 6 && r.right - e.clientX >= -2) ? c : null;
+  }
+  document.addEventListener('pointermove', e => {
+    if(drag){ rtSetColWidth(drag.cell, drag.w0 + (e.clientX - drag.x0)); e.preventDefault(); return; }
+    if(e.pointerType === 'touch') return;
+    const a = document.querySelector('.rt-area'); if(!a) return;
+    a.style.cursor = edgeCell(e) ? 'col-resize' : '';
+  });
+  document.addEventListener('pointerdown', e => {
+    const c = edgeCell(e); if(!c) return;
+    e.preventDefault();
+    drag = { cell: c, x0: e.clientX, w0: c.offsetWidth };
+  });
+  const end = () => { drag = null; };
+  document.addEventListener('pointerup', end); document.addEventListener('pointercancel', end);
+})();
 function getRich(id){
   const a = document.getElementById(id); if(!a) return '';
   const html = sanitizeRich(a.innerHTML, false);
@@ -2243,9 +2309,104 @@ function richEditorHtml(id, initialHtml, placeholder){
       <span class="rt-sep"></span>
       <span class="rt-lab">표 편집(칸을 누른 뒤)</span>
       ${rtB('행+',"rtTableOp('addRow')")}${rtB('행−',"rtTableOp('delRow')")}${rtB('열+',"rtTableOp('addCol')")}${rtB('열−',"rtTableOp('delCol')")}${rtB('표 삭제',"rtTableOp('delTable')")}
+      <span class="rt-sep"></span>
+      <span class="rt-lab">칸 너비</span>${rtB('◀ 좁게',"rtColWidth(-30)")}${rtB('넓게 ▶',"rtColWidth(30)")}
+      <span class="rt-lab">칸 합치기</span>${rtB('→',"rtMerge('right')",'오른쪽 칸과 합치기')}${rtB('↓',"rtMerge('down')",'아래 칸과 합치기')}
+      <span class="rt-lab" style="flex-basis:100%;">PC에서는 칸 경계선을 마우스로 끌어서 너비를 바꿀 수 있어요</span>
     </div>
     <div id="${id}" class="rt-area rt-content" contenteditable="true" data-ph="${placeholder||''}" onpaste="rtPaste(event)">${initialHtml||''}</div>
   </div>`;
+}
+
+/* ---------------------------------------------------------
+   공지 '회원 직접 등록' (신규 기입만 가능 · 수정/삭제는 관리자만)
+   noticeEntries 컬렉션: { id, noticeId, category, company, service, address, memberId, batch, name, createdAt }
+--------------------------------------------------------- */
+const entryStore = {};   // noticeId -> [entries]
+const entryUnsubs = {};  // noticeId -> unsubscribe
+function startEntriesListeners(){
+  document.querySelectorAll('.entries-box[data-nid]').forEach(box => {
+    const nid = box.getAttribute('data-nid');
+    if(!entryUnsubs[nid]){
+      entryUnsubs[nid] = db.collection('noticeEntries').where('noticeId', '==', nid).onSnapshot(snap => {
+        entryStore[nid] = snap.docs.map(d => ({ id: d.id, ...d.data() })).sort((a,b) => a.createdAt - b.createdAt);
+        renderEntryBoxes(nid);
+      }, err => { console.error('[entries]', err); entryStore[nid] = entryStore[nid] || []; renderEntryBoxes(nid); });
+    } else if(entryStore[nid]) renderEntryBoxes(nid);
+  });
+}
+function entryWho(e){
+  const label = (e.batch ? e.batch + '회 ' : '') + (currentMember() ? e.name : maskName(e.name));
+  return esc(label);
+}
+function renderEntryBoxes(nid){
+  const list = entryStore[nid] || [];
+  const n = state.notices.find(x => x.id === nid);
+  const admin = isAdmin();
+  const html = `
+    <div class="section-title" style="margin-top:14px;">회원 직접 등록 명단 (${list.length})</div>
+    <p class="helper" style="margin:0 0 8px;">누구나 새로 등록할 수 있어요. 등록한 내용은 본인이 수정·삭제할 수 없어요(오류는 관리자에게 요청).</p>
+    ${list.length ? `<div class="rt-wrap"><div class="rt-content"><table>
+      <thead><tr><th>분류</th><th>상호명</th><th>주요서비스</th><th>기수·성함</th><th>주소</th>${admin ? '<th></th>' : ''}</tr></thead>
+      <tbody>${list.map(e => `<tr><td>${esc(e.category||'')}</td><td>${esc(e.company)}</td><td>${esc(e.service)}</td><td>${entryWho(e)}</td><td>${esc(e.address)}</td>${admin ? `<td><button class="btn btn-ghost btn-sm" onclick="deleteEntry('${e.id}','${nid}')">삭제</button></td>` : ''}</tr>`).join('')}</tbody>
+    </table></div></div>` : '<div class="empty" style="padding:14px 0;">아직 등록된 업체가 없어요. 첫 번째로 등록해보세요!</div>'}
+    <button class="btn btn-accent btn-block" style="margin-top:8px;" onclick="openEntryModal('${nid}')">+ 내 업체 등록하기</button>
+    ${admin && list.length ? `<button class="btn btn-ghost btn-block" onclick="exportEntries('${nid}')">⬇ 등록 명단 엑셀</button>` : ''}
+  `;
+  document.querySelectorAll(`.entries-box[data-nid="${nid}"]`).forEach(b => { b.innerHTML = html; });
+}
+function entriesBoxHtml(n){
+  return n.entriesEnabled ? `<div class="entries-box" data-nid="${n.id}"><p class="helper">불러오는 중…</p></div>` : '';
+}
+function toggleEntries(id){
+  if(!isAdmin()) return;
+  const n = state.notices.find(x => x.id === id); if(!n) return;
+  n.entriesEnabled = !n.entriesEnabled;
+  saveNotices(); logActivity('회원 직접 등록 ' + (n.entriesEnabled ? '켜기' : '끄기'), n.title);
+  closeModal(); showToast(n.entriesEnabled ? '회원 직접 등록을 켰어요' : '회원 직접 등록을 껐어요 (등록된 내용은 보존돼요)'); renderAll();
+}
+function openEntryModal(nid){
+  if(!requireLogin()) return;
+  const me = currentMember();
+  const mine = (entryStore[nid] || []).filter(e => e.memberId === me.id).length;
+  if(mine >= 5){ showToast('한 공지에는 최대 5건까지 등록할 수 있어요'); return; }
+  openModal('내 업체 등록', `
+    <p class="helper">등록 후에는 <b>본인이 수정·삭제할 수 없어요.</b> 오탈자는 제출 전에 꼭 확인해주세요.</p>
+    <div class="card" style="background:#F7F8FA; font-size:13px;">기수·성함: <b>${me.batch ? esc(String(batchNumber(me.batch))) + '회 ' : ''}${esc(me.name)}</b> (내 정보로 자동 입력)</div>
+    <div class="field"><label>분류</label><input id="enCat" list="enCatList" placeholder="예: 식당 / 병원 / 법률 / 기타" maxlength="20">
+      <datalist id="enCatList"><option value="식당"><option value="기타"><option value="병원·의료"><option value="법률·세무"><option value="제조·유통"><option value="IT·서비스"></datalist></div>
+    <div class="field"><label>상호명 *</label><input id="enCompany" placeholder="예: 영동식당" maxlength="60"></div>
+    <div class="field"><label>주요서비스 *</label><input id="enService" placeholder="예: 한식, 단체 예약 / 수입차 정비 등" maxlength="100"></div>
+    <div class="field"><label>주소 *</label><input id="enAddress" placeholder="예: 서울 강남구 OO로 12" maxlength="120"></div>
+    <button class="btn btn-accent btn-block" onclick="addEntry('${nid}')">등록하기</button>
+  `);
+}
+function addEntry(nid){
+  const me = currentMember(); if(!me) return;
+  const v = id => (document.getElementById(id).value || '').trim();
+  const company = v('enCompany'), service = v('enService'), address = v('enAddress');
+  if(!company || !service || !address){ showToast('상호명 · 주요서비스 · 주소는 꼭 입력해주세요'); return; }
+  if(!confirm('등록하면 본인이 수정·삭제할 수 없어요. 등록할까요?')) return;
+  const id = uid();
+  db.collection('noticeEntries').doc(id).set({
+    id, noticeId: nid, category: v('enCat'), company, service, address,
+    memberId: me.id, name: me.name, batch: me.batch ? batchNumber(me.batch) : '', createdAt: Date.now(),
+  }).then(() => { showToast('등록했어요'); }).catch(() => showToast('등록 실패, 다시 시도해주세요'));
+  logActivity('업체 직접 등록', company);
+  closeModal();
+}
+function deleteEntry(id, nid){
+  if(!isAdmin()) return;
+  if(!confirm('이 등록 건을 삭제할까요?')) return;
+  db.collection('noticeEntries').doc(id).delete().then(() => showToast('삭제했어요')).catch(()=>showToast('삭제 실패'));
+  logActivity('등록 명단 삭제', id);
+}
+function exportEntries(nid){
+  if(!isAdmin()) return;
+  const n = state.notices.find(x => x.id === nid);
+  const rows = (entryStore[nid] || []).map((e,i) => ({ 'No.': i+1, '분류': e.category||'', '상호명': e.company, '주요서비스': e.service, '기수': e.batch||'', '성함': e.name, '주소': e.address, '등록일시': new Date(e.createdAt).toLocaleString('ko-KR') }));
+  const ws = XLSX.utils.json_to_sheet(rows); const wb = XLSX.utils.book_new(); XLSX.utils.book_append_sheet(wb, ws, '등록명단');
+  XLSX.writeFile(wb, `${n ? n.title : '공지'}_회원등록명단.xlsx`);
 }
 
 /* ---------------------------------------------------------
@@ -2441,6 +2602,7 @@ function renderApp(){
   else if(state.tab === 'deals') app.innerHTML = renderDealsTab();
   else if(state.tab === 'members') app.innerHTML = renderMembersTab();
   else app.innerHTML = renderMyTab();
+  startEntriesListeners();
 }
 
 function noticeCardFull(n, inList){
@@ -2450,8 +2612,9 @@ function noticeCardFull(n, inList){
       <h3>${n.pinned ? '📌 ' : ''}${n.title}</h3>
       <p class="meetup-meta" style="margin:2px 0 8px;">${memberDisplayName(n.authorId, n.author)} · ${n.date}${n.editedAt ? ' · 수정됨' : ''}</p>
       ${richView(n)}
+      ${entriesBoxHtml(n)}
       ${inList ? `<button class="btn btn-ghost btn-block" style="margin-top:12px;" onclick="openNoticeDetailModal('${n.id}')">💬 댓글 보기 · 쓰기</button>` : ''}
-      ${(admin || hasPerm('notice')) ? `<div style="margin-top:10px; display:flex; gap:8px; flex-wrap:wrap;"><button class="btn btn-ghost btn-sm" onclick="togglePinNotice('${n.id}')">${n.pinned ? '📌 고정 해제' : '📌 상단 고정'}</button>${admin ? `<button class="btn btn-ghost btn-sm" onclick="openEditNoticeModal('${n.id}')">수정</button><button class="btn btn-coral btn-sm" onclick="deleteNotice('${n.id}')">삭제</button>` : ''}</div>` : ''}
+      ${(admin || hasPerm('notice')) ? `<div style="margin-top:10px; display:flex; gap:8px; flex-wrap:wrap;"><button class="btn btn-ghost btn-sm" onclick="togglePinNotice('${n.id}')">${n.pinned ? '📌 고정 해제' : '📌 상단 고정'}</button>${admin ? `<button class="btn btn-ghost btn-sm" onclick="toggleEntries('${n.id}')">${n.entriesEnabled ? '📝 회원등록 끄기' : '📝 회원등록 켜기'}</button><button class="btn btn-ghost btn-sm" onclick="openEditNoticeModal('${n.id}')">수정</button><button class="btn btn-coral btn-sm" onclick="deleteNotice('${n.id}')">삭제</button>` : ''}</div>` : ''}
     </div>
   `;
 }
