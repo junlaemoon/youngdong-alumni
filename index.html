@@ -90,7 +90,7 @@ body{
   border-radius:14px; padding:4px; box-shadow:var(--shadow); border:1px solid var(--line);
 }
 .tab-btn{
-  flex:1; border:none; background:transparent; padding:10px 4px; font-size:13.5px; font-weight:600;
+  flex:1; border:none; background:transparent; padding:10px 2px; font-size:13px; white-space:nowrap; font-weight:600;
   color:var(--ink-soft); border-radius:10px; cursor:pointer; font-family:inherit;
 }
 .tab-btn.active{background:var(--ink); color:#fff;}
@@ -321,6 +321,7 @@ let state = {
   meetups: [],
   requests: [],
   posts: [],
+  deals: [],
   session: null,       // {memberId}
   tab: 'notice',
   calMonth: startOfMonth(new Date()),
@@ -441,7 +442,7 @@ function showToast(msg){
 --------------------------------------------------------- */
 const db = firebase.firestore();
 // 마지막으로 Firestore와 동기화된 상태의 스냅샷 (변경분만 골라 쓰기 위한 캐시)
-const fsCache = { members: {}, notices: {}, meetups: {}, requests: {}, posts: {} };
+const fsCache = { members: {}, notices: {}, meetups: {}, requests: {}, posts: {}, deals: {} };
 
 async function loadCollection(name, orderByField, limitN){
   let ref = db.collection(name);
@@ -545,12 +546,15 @@ async function init(){
     logVisit();
   }
 
-  try{
-    db.collection('meta').doc('feedIntro').onSnapshot(d => {
-      state.feedIntro = d.exists ? (d.data().text || '') : '';
-      if(state.loaded && state.tab === 'feed' && !modalIsOpen()) renderApp();
-    }, () => {});
-  }catch(e){}
+  ['notice','feed','schedule','deals'].forEach(kind => {
+    try{
+      db.collection('meta').doc(kind + 'Intro').onSnapshot(d => {
+        state.intros = state.intros || {};
+        state.intros[kind] = d.exists ? (d.data().text || '') : '';
+        if(state.loaded && state.tab === kind && !modalIsOpen()) renderApp();
+      }, () => {});
+    }catch(e){}
+  });
   attachLiveCollection('members', null, null, (arr) => {
     state.members = arr; ready.members = true;
     if(state.loaded) renderAll(); else runFirstTimeSetupIfReady();
@@ -566,6 +570,10 @@ async function init(){
   attachLiveCollection('requests', null, null, (arr) => {
     state.requests = arr; ready.requests = true;
     if(state.loaded) renderApp(); else runFirstTimeSetupIfReady();
+  });
+  attachLiveCollection('deals', 'createdAt', 150, (arr) => {
+    state.deals = arr;
+    if(state.loaded && !modalIsOpen()) renderApp();
   });
   attachLiveCollection('posts', 'createdAt', POST_LOAD_LIMIT, (arr) => {
     state.posts = arr; ready.posts = true;
@@ -818,7 +826,7 @@ function trackView(type, id){
   db.collection('viewCounts').doc(key).set({ type, itemId: id, count: firebase.firestore.FieldValue.increment(1), lastAt: Date.now() }, { merge: true }).catch(()=>{});
 }
 
-const VIEW_TYPE_LABEL = { notice: '공지', post: '소식', meetup: '모임' };
+const VIEW_TYPE_LABEL = { notice: '공지', post: '소식', meetup: '모임', deal: '동문장터' };
 function statRow(cells, opts){
   opts = opts || {};
   const cols = opts.cols || cells.map(() => '1fr').join(' ');
@@ -864,7 +872,7 @@ async function loadStatsBody(tab){
         <p class="helper">같은 기기에서 같은 글은 하루 1회만 집계돼요. 관리자 본인 조회는 제외돼요. (상위 50개)</p>
         ${statRow(['구분','제목','조회수'], { head: true, cols: '0.6fr 2.4fr 0.8fr' })}
         ${rows.length ? rows.map(r => {
-          const list = r.type === 'notice' ? state.notices : r.type === 'post' ? state.posts : state.meetups;
+          const list = r.type === 'notice' ? state.notices : r.type === 'post' ? state.posts : r.type === 'deal' ? state.deals : state.meetups;
           const item = list.find(x => x.id === r.itemId);
           const title = item ? esc(item.title || '(제목없음)') : '(삭제되었거나 오래된 항목)';
           return statRow([VIEW_TYPE_LABEL[r.type] || '-', title, (r.count||0)+'회'], { cols: '0.6fr 2.4fr 0.8fr' });
@@ -1869,6 +1877,173 @@ function openPostModal(){
 }
 
 /* ---------------------------------------------------------
+   동문장터 (동문기업 공동구매) — deals 컬렉션
+--------------------------------------------------------- */
+async function saveDeals(){ try{ await syncCollection('deals', state.deals); }catch(e){ console.error(e); showToast('저장 실패, 다시 시도해주세요'); } }
+function dealCount(d){ return (d.participants||[]).length; }
+function dealState(d){
+  const n = dealCount(d);
+  const expired = d.deadline && d.deadline < ymd(new Date());
+  const full = d.maxCount && n >= d.maxCount;
+  const closed = !!(d.closedManually || expired || full);
+  const success = n >= (d.minCount || 0) && n > 0;
+  return { n, closed, success, expired, full };
+}
+function dealCardHtml(d){
+  const st = dealState(d);
+  const pending = d.status === 'pending';
+  const badge = pending ? '<span class="req-sub" style="color:#B45309;">🕓 승인 대기</span>'
+    : st.closed ? '<span class="req-sub">마감</span>'
+    : st.success ? '<span class="req-sub" style="color:#15803D;">✅ 성사</span>'
+    : '<span class="req-sub" style="color:#1D4ED8;">모집중</span>';
+  return `
+    <div class="card" style="cursor:pointer; display:flex; gap:12px;" onclick="openDealDetailModal('${d.id}')">
+      ${d.image ? `<img src="${d.image}" style="width:84px; height:84px; object-fit:cover; border-radius:10px; flex:none;">` : `<div style="width:84px; height:84px; border-radius:10px; background:#EEF2F8; display:flex; align-items:center; justify-content:center; font-size:28px; flex:none;">🛍</div>`}
+      <div style="flex:1; min-width:0;">
+        <div style="display:flex; justify-content:space-between; gap:6px;"><h3 style="margin:0; font-size:15px;">${esc(d.title)}</h3>${badge}</div>
+        <div class="meetup-meta" style="margin:2px 0;">${esc(d.company)} · ${esc(d.ownerName||'')}${d.ownerBatch ? ` (${esc(String(d.ownerBatch))}회)` : ''}</div>
+        ${d.price ? `<div style="font-weight:800; font-size:14px;">${esc(d.price)}</div>` : ''}
+        <div class="req-sub">참여 ${st.n}${d.minCount ? ` / 최소 ${d.minCount}` : ''}명${d.deadline ? ` · ~${fmtDateKR(d.deadline)}` : ''}</div>
+      </div>
+    </div>`;
+}
+function renderDealsTab(){
+  const me = currentMember();
+  const mine = (d) => me && (d.ownerId === me.id);
+  const visible = state.deals.filter(d => d.status !== 'pending' || isAdmin() || mine(d));
+  const pend = visible.filter(d => d.status === 'pending').sort((a,b)=>b.createdAt-a.createdAt);
+  const live = visible.filter(d => d.status !== 'pending' && !dealState(d).closed).sort((a,b)=>b.createdAt-a.createdAt);
+  const done = visible.filter(d => d.status !== 'pending' && dealState(d).closed).sort((a,b)=>b.createdAt-a.createdAt);
+  return `
+    ${introBoxHtml('deals')}
+    <button class="btn btn-primary btn-block" onclick="openDealModal()">+ 공동구매 등록</button>
+    ${pend.length ? `<div class="section-title">${isAdmin() ? '승인 대기' : '내 승인 대기'} (${pend.length})</div>${pend.map(dealCardHtml).join('')}` : ''}
+    <div class="section-title">진행중인 공동구매</div>
+    ${live.length ? live.map(dealCardHtml).join('') : '<div class="empty">아직 등록된 공동구매가 없어요.<br>동문 기업·가게의 상품을 소개해보세요!</div>'}
+    ${done.length ? `<div class="section-title">마감</div>${done.map(dealCardHtml).join('')}` : ''}
+    <p class="helper" style="margin-top:14px;">결제와 배송은 업체와 동문이 직접 진행해요. 동문회는 소개와 참여자 모집만 도와요.</p>
+  `;
+}
+function openDealModal(){
+  if(!requireLogin()) return;
+  pendingPostImage = null;
+  const me = currentMember();
+  openModal('공동구매 등록', `
+    <p class="helper">${isAdmin() ? '' : '등록하면 관리자 확인 후 게시돼요.'}</p>
+    <div class="field"><label>상품·서비스 이름</label><input id="dlTitle" placeholder="예: 산지직송 사과 10kg"></div>
+    <div class="field"><label>업체(회사)명</label><input id="dlCompany" placeholder="예: OO농원"></div>
+    <div class="field"><label>가격 / 동문 할인 조건</label><input id="dlPrice" placeholder="예: 39,000원 (정가 49,000원)"></div>
+    <div class="field"><label>상세 설명</label><textarea id="dlDesc" rows="4" placeholder="상품 소개, 배송 방법, 유의사항 등"></textarea></div>
+    <div class="field"><label>문의 연락처</label><input id="dlContact" placeholder="전화번호 또는 이메일 (참여 동문에게만 보여요)"></div>
+    <div class="field"><label>모집 마감일</label><input id="dlDeadline" type="date"></div>
+    <div style="display:flex; gap:8px;">
+      <div class="field" style="flex:1;"><label>최소 인원</label><input id="dlMin" type="number" min="0" placeholder="0"></div>
+      <div class="field" style="flex:1;"><label>최대 인원 (0=제한없음)</label><input id="dlMax" type="number" min="0" placeholder="0"></div>
+    </div>
+    <label class="file-btn">📷 사진 추가 (선택)<input type="file" accept="image/*" style="display:none" onchange="handleImageSelect(this)"></label>
+    <img id="postImagePreview" class="image-preview">
+    <button class="btn btn-accent btn-block" style="margin-top:14px;" onclick="addDeal()">등록하기</button>
+  `);
+}
+function addDeal(){
+  const me = currentMember(); if(!me) return;
+  const v = id => (document.getElementById(id)||{}).value || '';
+  const title = v('dlTitle').trim(), company = v('dlCompany').trim();
+  if(!title || !company){ showToast('상품 이름과 업체명은 꼭 입력해주세요'); return; }
+  const needsApproval = !isAdmin();
+  state.deals.unshift({
+    id: uid(), title, company, price: v('dlPrice').trim(), desc: v('dlDesc').trim(), contact: v('dlContact').trim(),
+    deadline: v('dlDeadline'), minCount: Number(v('dlMin')) || 0, maxCount: Number(v('dlMax')) || 0,
+    image: pendingPostImage, ownerId: me.id, ownerName: me.name, ownerBatch: batchNumber(me.batch) || '',
+    participants: [], status: needsApproval ? 'pending' : 'approved', createdAt: Date.now(),
+  });
+  pendingPostImage = null;
+  saveDeals(); logActivity('공동구매 등록', `${title} · ${company}`);
+  closeModal();
+  showToast(needsApproval ? '등록 요청을 보냈어요. 관리자 확인 후 게시돼요.' : '공동구매를 등록했어요');
+  renderAll();
+}
+function openDealDetailModal(id){
+  const d = state.deals.find(x => x.id === id); if(!d) return;
+  trackView('deal', id);
+  const me = currentMember();
+  const st = dealState(d);
+  const joined = me && (d.participants||[]).some(p => p.memberId === me.id);
+  const isOwner = me && d.ownerId === me.id;
+  const canSeeContact = joined || isOwner || isAdmin();
+  const joinBtn = d.status === 'pending' ? '' :
+    joined ? `<button class="btn btn-ghost btn-block" onclick="leaveDeal('${id}')">참여 취소</button>`
+    : st.closed ? `<button class="btn btn-ghost btn-block" disabled>모집이 마감됐어요</button>`
+    : `<button class="btn btn-accent btn-block" onclick="joinDeal('${id}')">참여 신청</button>`;
+  const people = (isOwner || isAdmin()) ? `
+    <div class="section-title">참여자 (${st.n})</div>
+    ${(d.participants||[]).map((p,i) => { const m = state.members.find(x=>x.id===p.memberId); return `<div class="req-row"><span class="req-name">${i+1}. ${m ? esc(m.name) : '(탈퇴회원)'}</span><span class="req-sub">${m ? displayBatch(m.batch) : ''}</span></div>`; }).join('') || '<p class="helper">아직 참여자가 없어요</p>'}
+    <button class="btn btn-ghost btn-block" onclick="exportDealParticipants('${id}')">⬇ 참여자 명단 엑셀</button>` : '';
+  const adminBtns = isAdmin() ? `
+    ${d.status === 'pending' ? `<button class="btn btn-accent btn-block" onclick="approveDeal('${id}')">✅ 승인하고 게시</button>` : ''}
+  ` : '';
+  const ownerBtns = (isOwner || isAdmin()) ? `
+    ${d.status !== 'pending' && !d.closedManually ? `<button class="btn btn-ghost btn-block" onclick="closeDeal('${id}')">모집 마감하기</button>` : ''}
+    <button class="btn btn-ghost btn-block" style="color:#B91C1C;" onclick="deleteDeal('${id}')">${d.status==='pending' && isAdmin() ? '반려(삭제)' : '삭제'}</button>` : '';
+  openModal(esc(d.title), `
+    ${d.image ? `<img src="${d.image}" style="width:100%; border-radius:12px; margin-bottom:10px;">` : ''}
+    <div class="meetup-meta">${esc(d.company)} · ${esc(d.ownerName||'')}${d.ownerBatch ? ` (${esc(String(d.ownerBatch))}회)` : ''}</div>
+    ${d.price ? `<div style="font-weight:800; font-size:17px; margin:6px 0;">${esc(d.price)}</div>` : ''}
+    <div class="req-sub" style="margin-bottom:8px;">참여 ${st.n}${d.minCount ? ` / 최소 ${d.minCount}명${st.success ? ' ✅ 성사' : ''}` : '명'}${d.maxCount ? ` · 최대 ${d.maxCount}명` : ''}${d.deadline ? ` · 마감 ${fmtDateKR(d.deadline)}` : ''}</div>
+    ${d.desc ? `<p style="white-space:pre-wrap; font-size:13.5px; line-height:1.65;">${esc(d.desc)}</p>` : ''}
+    <div class="card" style="background:#F7F8FA;">📞 문의: ${canSeeContact ? esc(d.contact || '(미입력)') : '참여 신청한 동문에게 공개돼요'}</div>
+    ${joinBtn}${adminBtns}
+    ${people}
+    ${d.status !== 'pending' ? commentsSectionHtml('deal', id) : ''}
+    ${ownerBtns}
+  `, true);
+  if(d.status !== 'pending') startCommentsListener('deal', id);
+}
+function joinDeal(id){
+  if(!requireLogin()) return;
+  const d = state.deals.find(x => x.id === id); const me = currentMember();
+  if(!d || dealState(d).closed) return;
+  d.participants = d.participants || [];
+  if(d.participants.some(p => p.memberId === me.id)) return;
+  d.participants.push({ memberId: me.id, at: Date.now() });
+  saveDeals(); showToast('참여 신청했어요'); openDealDetailModal(id); renderApp();
+}
+function leaveDeal(id){
+  const d = state.deals.find(x => x.id === id); const me = currentMember(); if(!d || !me) return;
+  d.participants = (d.participants||[]).filter(p => p.memberId !== me.id);
+  saveDeals(); showToast('참여를 취소했어요'); openDealDetailModal(id); renderApp();
+}
+function approveDeal(id){
+  if(!isAdmin()) return;
+  const d = state.deals.find(x => x.id === id); if(!d) return;
+  d.status = 'approved'; saveDeals(); logActivity('공동구매 승인', d.title);
+  showToast('게시했어요'); closeModal(); renderApp();
+}
+function closeDeal(id){
+  const d = state.deals.find(x => x.id === id); if(!d) return;
+  if(!confirm('모집을 마감할까요?')) return;
+  d.closedManually = true; saveDeals(); closeModal(); renderApp();
+}
+function deleteDeal(id){
+  const d = state.deals.find(x => x.id === id); if(!d) return;
+  if(!confirm('이 공동구매를 삭제할까요?')) return;
+  state.deals = state.deals.filter(x => x.id !== id);
+  saveDeals(); logActivity('공동구매 삭제', d.title); closeModal(); showToast('삭제했어요'); renderApp();
+}
+function exportDealParticipants(id){
+  const d = state.deals.find(x => x.id === id); const me = currentMember();
+  if(!d || !(isAdmin() || (me && d.ownerId === me.id))) return;
+  if(!(d.participants||[]).length){ showToast('아직 참여자가 없어요'); return; }
+  const rows = d.participants.map((p,i) => {
+    const m = state.members.find(x => x.id === p.memberId);
+    return { '상품': d.title, '업체': d.company, 'No.': i+1, '기수': m ? batchNumber(m.batch) : '', '이름': m ? m.name : '(탈퇴회원)', '직함': m ? (m.title||'') : '', '연락처': m ? maskPhone(m.phone) : '', '신청일시': new Date(p.at).toLocaleString('ko-KR') };
+  });
+  const ws = XLSX.utils.json_to_sheet(rows);
+  const wb = XLSX.utils.book_new(); XLSX.utils.book_append_sheet(wb, ws, '참여자명단');
+  XLSX.writeFile(wb, `${d.title}_공동구매참여자.xlsx`);
+}
+
+/* ---------------------------------------------------------
    렌더 - 세션칩 & 탭바
 --------------------------------------------------------- */
 function renderSessionChip(){
@@ -2006,6 +2181,7 @@ function renderTabs(){
     {id:'notice', label:'공지'},
     {id:'feed', label:'소식'},
     {id:'schedule', label:'일정'},
+    {id:'deals', label:'동문장터'},
     {id:'members', label:'회원'},
     {id:'mypage', label:'마이페이지'},
   ];
@@ -2047,6 +2223,7 @@ function renderApp(){
   if(state.tab === 'notice') app.innerHTML = renderNoticeTab();
   else if(state.tab === 'feed') app.innerHTML = renderFeedTab();
   else if(state.tab === 'schedule') app.innerHTML = renderScheduleTab();
+  else if(state.tab === 'deals') app.innerHTML = renderDealsTab();
   else if(state.tab === 'members') app.innerHTML = renderMembersTab();
   else app.innerHTML = renderMyTab();
 }
@@ -2090,6 +2267,7 @@ function onNoticeSearch(v){
 }
 function renderNoticeTab(){
   return `
+    ${introBoxHtml('notice')}
     ${hasPerm('notice') ? `<button class="btn btn-primary btn-block" onclick="openNoticeModal()">+ 공지 작성</button>` : ''}
     <div class="field" style="margin-top:12px;"><input id="noticeSearchInput" placeholder="🔍 공지 제목·내용 검색" value="${state.noticeSearch||''}" oninput="onNoticeSearch(this.value)"></div>
     <div class="section-title">공지사항</div>
@@ -2158,16 +2336,26 @@ function onFeedSearch(v){
   const el = document.getElementById('feedListArea');
   if(el) el.innerHTML = renderFeedList();
 }
-const DEFAULT_FEED_INTRO = '동문들의 근황과 이야기를 나누는 공간이에요. 서로 존중하며 따뜻한 소식을 남겨주세요.';
-function renderFeedTab(){
-  const intro = (state.feedIntro || DEFAULT_FEED_INTRO);
+const INTRO_DEFAULTS = {
+  notice: '총동문회의 공식 안내가 올라오는 곳이에요. 중요한 소식은 가장 위에 전문이 보여요.',
+  feed: '동문들의 근황과 이야기를 나누는 공간이에요. 서로 존중하며 따뜻한 소식을 남겨주세요.',
+  deals: '동문 기업·가게의 상품을 소개하고 함께 모아 구매하는 공간이에요. 등록은 관리자 확인 후 게시돼요.',
+  schedule: '동문회 모임과 행사 일정이에요. 날짜를 눌러 모임을 확인하고 참석을 신청하세요.',
+};
+const INTRO_LABELS = { notice:'공지', feed:'소식', schedule:'일정', deals:'동문장터' };
+function introBoxHtml(kind){
+  const intro = (state.intros && state.intros[kind]) || INTRO_DEFAULTS[kind];
   return `
     <div class="card" style="margin-bottom:12px; background:#F4F8FF; border:1px solid #DCE6F7;">
       <div style="display:flex; gap:8px; align-items:flex-start;">
         <div style="flex:1; font-size:13px; line-height:1.6; color:var(--ink-soft); white-space:pre-wrap;">📌 ${esc(intro)}</div>
-        ${isAdmin() ? `<button class="btn btn-ghost" style="padding:4px 10px; font-size:12px;" onclick="openFeedIntroModal()">수정</button>` : ''}
+        ${isAdmin() ? `<button class="btn btn-ghost" style="padding:4px 10px; font-size:12px;" onclick="openIntroModal('${kind}')">수정</button>` : ''}
       </div>
-    </div>
+    </div>`;
+}
+function renderFeedTab(){
+  return `
+    ${introBoxHtml('feed')}
     ${hasPerm('feed') ? `<button class="btn btn-primary btn-block" onclick="openPostModal()">+ 소식 남기기</button>` : ''}
     <div class="field" style="margin-top:12px;"><input id="feedSearchInput" placeholder="🔍 소식 제목·내용 검색" value="${state.feedSearch||''}" oninput="onFeedSearch(this.value)"></div>
     <div class="section-title">동문 소식</div>
@@ -2315,6 +2503,7 @@ function renderScheduleTab(){
   const past = all.filter(mt => mt.date < ymd(new Date())).sort((a,b)=> (b.date+b.time).localeCompare(a.date+a.time));
 
   return `
+    ${introBoxHtml('schedule')}
     ${renderCalendar()}
     ${hasPerm('meetup') ? `<button class="btn btn-primary btn-block fab" onclick="openMeetupModal()">+ 모임 만들기</button>` : ''}
 
@@ -2341,19 +2530,19 @@ function setCreator(id){
   showToast(makeOn ? `${target.name}님을 플랫폼 제작자로 표시했어요` : '제작자 표시를 해제했어요');
   renderAll();
 }
-function openFeedIntroModal(){
+function openIntroModal(kind){
   if(!isAdmin()) return;
-  openModal('소식 안내 문구', `
-    <p class="helper">소식 탭 상단에 항상 보이는 짧은 안내 문구예요.</p>
-    <div class="field"><textarea id="feedIntroInput" rows="4" maxlength="200">${esc(state.feedIntro || DEFAULT_FEED_INTRO)}</textarea></div>
-    <button class="btn btn-accent btn-block" onclick="saveFeedIntro()">저장</button>
+  openModal(INTRO_LABELS[kind] + ' 안내 문구', `
+    <p class="helper">${INTRO_LABELS[kind]} 탭 상단에 항상 보이는 짧은 안내 문구예요.</p>
+    <div class="field"><textarea id="introInput" rows="4" maxlength="200">${esc((state.intros && state.intros[kind]) || INTRO_DEFAULTS[kind])}</textarea></div>
+    <button class="btn btn-accent btn-block" onclick="saveIntro('${kind}')">저장</button>
   `);
 }
-function saveFeedIntro(){
-  const v = document.getElementById('feedIntroInput').value.trim();
-  state.feedIntro = v;
-  db.collection('meta').doc('feedIntro').set({ text: v }).catch(()=>{});
-  logActivity('소식 안내 문구 수정', v.slice(0,30));
+function saveIntro(kind){
+  const v = document.getElementById('introInput').value.trim();
+  state.intros = state.intros || {}; state.intros[kind] = v;
+  db.collection('meta').doc(kind + 'Intro').set({ text: v }).catch(()=>{});
+  logActivity(INTRO_LABELS[kind] + ' 안내 문구 수정', v.slice(0,30));
   closeModal(); showToast('저장했어요'); renderApp();
 }
 const TITLE_PRESETS = ['총동문회장','사무총장','이사','총무'];
