@@ -2381,20 +2381,71 @@ function entryWho(e){
   const label = (e.batch ? e.batch + '회 ' : '') + (currentMember() ? e.name : maskName(e.name));
   return esc(label);
 }
+const ENTRY_CATS = ['식당','휴대폰','금은방·귀금속','병원·의료','건강검진','법률·세무','제조·유통','IT·서비스','기타'];
+const entryFilter = {};
+function entryCatList(nid){
+  const extra = [];
+  (entryStore[nid] || []).forEach(e => { const c = (e.category || '').trim(); if(c && !ENTRY_CATS.includes(c) && !extra.includes(c)) extra.push(c); });
+  return ENTRY_CATS.concat(extra);
+}
+function entryCatRank(c, nid){ c = (c || '').trim(); if(!c) return 999; const i = entryCatList(nid).indexOf(c); return i < 0 ? 998 : i; }
+function normalizeEntryCategory(c){
+  c = String(c || '').trim(); if(!c) return '';
+  if(ENTRY_CATS.includes(c)) return c;
+  const t = c.replace(/\s+/g,'');
+  if(/휴대폰|핸드폰|통신|텔레콤|폰/.test(t)) return '휴대폰';
+  if(/금은방|귀금속|보석|주얼리|금\/은|예물/.test(t)) return '금은방·귀금속';
+  if(/식당|음식|한식|중식|일식|양식|카페|맛집|고기|치킨|분식|주점|술집/.test(t)) return '식당';
+  if(/병원|의원|의료|한의원|치과|약국/.test(t)) return '병원·의료';
+  if(/검진|건강/.test(t)) return '건강검진';
+  if(/법률|변호|세무|회계|법무|노무/.test(t)) return '법률·세무';
+  if(/제조|유통|도매|무역/.test(t)) return '제조·유통';
+  if(/IT|소프트|개발|디자인|광고|마케팅/i.test(t)) return 'IT·서비스';
+  return c;
+}
+function entryCatFieldHtml(nid, cur){
+  cur = (cur || '').trim();
+  const list = entryCatList(nid); const inList = !cur || list.includes(cur);
+  return `<div class="field"><label>분류</label>
+    <select id="enCatSel" onchange="entryCatChange()"><option value="">(선택)</option>${list.map(c => `<option value="${esc(c)}" ${c === cur ? 'selected' : ''}>${esc(c)}</option>`).join('')}<option value="__custom" ${inList ? '' : 'selected'}>직접 입력…</option></select>
+    <input id="enCat" maxlength="12" placeholder="분류를 직접 입력 (12자 이내)" style="margin-top:6px; ${inList ? 'display:none;' : ''}" value="${inList ? '' : esc(cur)}"></div>`;
+}
+function entryCatChange(){ const sel = document.getElementById('enCatSel'), inp = document.getElementById('enCat'); inp.style.display = sel.value === '__custom' ? 'block' : 'none'; if(sel.value === '__custom') inp.focus(); }
+function entryCatValue(){ const sel = document.getElementById('enCatSel'); if(!sel) return ''; return sel.value === '__custom' ? ((document.getElementById('enCat') || {}).value || '').trim() : sel.value; }
+function setEntryFilter(nid, c){ entryFilter[nid] = c; renderEntryBoxes(nid); }
+function normName(x){ return String(x || '').replace(/\s+/g, ''); }
+// 관리자가 대신 올린 글도, 로그인한 회원의 이름(+기수)과 일치하면 본인이 수정할 수 있게 인식
+function entryOwnerByName(e, me){
+  if(!e || !me || !e.byAdmin || !e.name) return false;
+  if(normName(e.name) !== normName(me.name)) return false;
+  const mb = me.batch ? batchNumber(me.batch) : '';
+  if(e.batch && mb && Number(e.batch) !== Number(mb)) return false;
+  if(!e.batch || !mb){ // 기수가 한쪽이라도 비어 있으면 동명이인이 없을 때만 인정
+    if(state.members.filter(m => normName(m.name) === normName(e.name)).length !== 1) return false;
+  }
+  return true;
+}
 function renderEntryBoxes(nid){
-  const list = entryStore[nid] || [];
+  const all = entryStore[nid] || [];
   const n = state.notices.find(x => x.id === nid);
   const admin = isAdmin();
-  const meId = (currentMember() || {}).id;
-  const canAct = e => admin || (meId && e.memberId === meId && !e.byAdmin);
+  const canAct = e => entryCanEdit(e);
+  const cur = entryFilter[nid] || '';
+  const counts = {}; all.forEach(e => { const c = (e.category || '').trim() || '미분류'; counts[c] = (counts[c] || 0) + 1; });
+  const catKeys = Object.keys(counts).sort((a,b) => entryCatRank(a === '미분류' ? '' : a, nid) - entryCatRank(b === '미분류' ? '' : b, nid));
+  const list = (cur ? all.filter(e => ((e.category || '').trim() || '미분류') === cur) : all)
+    .slice().sort((a,b) => entryCatRank(a.category, nid) - entryCatRank(b.category, nid) || a.createdAt - b.createdAt);
   const hasActs = list.some(canAct);
+  const chip = (label, val, cnt) => `<button type="button" class="btn btn-sm ${cur === val ? 'btn-accent' : 'btn-ghost'}" style="padding:4px 12px; font-size:12px; border-radius:999px;" onclick="setEntryFilter('${nid}','${val}')">${esc(label)} ${cnt}</button>`;
   const html = `
-    <div class="section-title" style="margin-top:14px;">회원 직접 등록 명단 (${list.length})</div>
-    <p class="helper" style="margin:0 0 8px;">누구나 등록할 수 있어요. 내가 올린 내용은 직접 수정·삭제할 수 있고, 다른 사람 글은 관리자만 고칠 수 있어요.</p>
+    <div class="section-title" style="margin-top:14px;">회원 직접 등록 명단 (${all.length})</div>
+    <p class="helper" style="margin:0 0 8px;">누구나 등록할 수 있어요. 내가 올린 글(관리자가 대신 올린 글도 내 이름·기수와 같으면 포함)은 직접 수정·삭제할 수 있어요.</p>
+    ${all.length > 1 && catKeys.length > 1 ? `<div style="display:flex; flex-wrap:wrap; gap:6px; margin-bottom:10px;">${chip('전체', '', all.length)}${catKeys.map(c => chip(c, c, counts[c])).join('')}</div>` : ''}
+    ${all.length && !list.length ? '<div class="empty" style="padding:10px 0;">이 분류에는 아직 없어요</div>' : ''}
     ${list.length ? `<div class="rt-wrap"><div class="rt-content"><table class="entry-table">
       <colgroup>${hasActs ? '<col style="width:10%"><col style="width:19%"><col style="width:24%"><col style="width:14%"><col style="width:20%"><col style="width:13%">' : '<col style="width:11%"><col style="width:22%"><col style="width:27%"><col style="width:15%"><col style="width:25%">'}</colgroup>
       <thead><tr><th>분류</th><th>상호명</th><th>주요서비스</th><th>기수·성함</th><th>주소 (클릭시 지도링크)</th>${hasActs ? '<th></th>' : ''}</tr></thead>
-      <tbody>${list.map(e => `<tr><td>${esc(e.category||'')}</td><td>${esc(e.company)}</td><td>${entryClip(e.service)}</td><td>${entryWho(e)}</td><td>${entryAddrCell(e)}</td>${hasActs ? `<td>${canAct(e) ? `<button class="btn btn-ghost btn-sm" onclick="openEntryEditModal('${e.id}','${nid}')">수정</button> <button class="btn btn-ghost btn-sm" onclick="deleteEntry('${e.id}','${nid}')">삭제</button>` : ''}</td>` : ''}</tr>`).join('')}</tbody>
+      <tbody>${list.map(e => `<tr><td>${esc((e.category||'').trim() || '미분류')}</td><td>${esc(e.company)}</td><td>${entryClip(e.service)}</td><td>${entryWho(e)}</td><td>${entryAddrCell(e)}</td>${hasActs ? `<td>${canAct(e) ? `<button class="btn btn-ghost btn-sm" onclick="openEntryEditModal('${e.id}','${nid}')">수정</button> <button class="btn btn-ghost btn-sm" onclick="deleteEntry('${e.id}','${nid}')">삭제</button>` : ''}</td>` : ''}</tr>`).join('')}</tbody>
     </table></div></div>` : '<div class="empty" style="padding:14px 0;">아직 등록된 업체가 없어요. 첫 번째로 등록해보세요!</div>'}
     <button class="btn btn-accent btn-block" style="margin-top:8px;" onclick="openEntryModal('${nid}')">+ 내 업체 등록하기</button>
     ${admin ? `<button class="btn btn-ghost btn-block" onclick="openEntryImportModal('${nid}')">⬆ 엑셀로 일괄 등록</button>` : ''}
@@ -2444,7 +2495,7 @@ function parseEntryRows(aoa){
     }
     batch = String(batch).replace(/[^\d]/g, '');
     const sp = splitAddr(g('address'));
-    rows.push({ category: g('category'), company, service: g('service'), batch: batch ? Number(batch) : '', name, address: sp.address, mapUrl: g('link') || sp.url, _r: i, _ac: map.address });
+    rows.push({ category: normalizeEntryCategory(g('category')), company, service: g('service'), batch: batch ? Number(batch) : '', name, address: sp.address, mapUrl: g('link') || sp.url, _r: i, _ac: map.address });
   }
   return { rows, note };
 }
@@ -2537,8 +2588,7 @@ function openEntryModal(nid){
         <input id="enName" placeholder="성함" maxlength="20" style="flex:1;">
       </div>
     </div>` : `<div class="card" style="background:#F7F8FA; font-size:13px;">기수·성함: <b>${me.batch ? esc(String(batchNumber(me.batch))) + '회 ' : ''}${esc(me.name)}</b> (내 정보로 자동 입력)</div>`}
-    <div class="field"><label>분류</label><input id="enCat" list="enCatList" placeholder="예: 식당 / 병원 / 법률 / 기타" maxlength="10">
-      <datalist id="enCatList"><option value="식당"><option value="기타"><option value="병원·의료"><option value="법률·세무"><option value="제조·유통"><option value="IT·서비스"></datalist></div>
+    ${entryCatFieldHtml(nid, '')}
     <div class="field"><label>상호명 *</label><input id="enCompany" placeholder="예: 영동식당" maxlength="25"></div>
     <div class="field"><label>주요서비스 * <span class="helper">(50자 이내)</span></label><input id="enService" placeholder="예: 한식 · 단체예약 (50자 이내)" maxlength="50"></div>
     <div class="field"><label>주소 * <span class="helper">(이 글자를 누르면 네이버 지도로 자동 연결돼요)</span></label><input id="enAddress" placeholder="예: 서울 강남구 OO로 12 / 강남구청역 행당점 (50자 이내)" maxlength="250"></div>
@@ -2563,13 +2613,13 @@ function addEntry(nid){
     if(on){ nm = on; bt = Number((document.getElementById('enBatch')||{}).value) || ''; byAdmin = true; }
   }
   db.collection('noticeEntries').doc(id).set({
-    id, noticeId: nid, category: v('enCat'), company, service, address,
+    id, noticeId: nid, category: entryCatValue(), company, service, address,
     memberId: me.id, name: nm, batch: bt, byAdmin, mapUrl: mapUrl || '', createdAt: Date.now(),
   }).then(() => { showToast('등록했어요'); }).catch(() => showToast('등록 실패, 다시 시도해주세요'));
   logActivity('업체 직접 등록', company);
   closeModal();
 }
-function entryCanEdit(e){ const me = currentMember(); return !!(e && me && (isAdmin() || (e.memberId === me.id && !e.byAdmin))); }
+function entryCanEdit(e){ const me = currentMember(); return !!(e && me && (isAdmin() || (e.memberId === me.id && !e.byAdmin) || entryOwnerByName(e, me))); }
 function openEntryEditModal(id, nid){
   const e = (entryStore[nid] || []).find(x => x.id === id);
   if(!entryCanEdit(e)) return;
@@ -2581,7 +2631,7 @@ function openEntryEditModal(id, nid){
         <input id="enBatch" type="number" min="1" placeholder="기수(숫자)" style="width:90px;" value="${e.batch || ''}">
         <input id="enName" placeholder="성함" maxlength="30" style="flex:1;" value="${val(e.name)}">
       </div></div>` : `<div class="card" style="background:#F7F8FA; font-size:13px;">기수·성함: <b>${e.batch ? e.batch + '회 ' : ''}${val(e.name)}</b></div>`}
-    <div class="field"><label>분류</label><input id="enCat" maxlength="20" value="${val(e.category)}"></div>
+    ${entryCatFieldHtml(nid, e.category)}
     <div class="field"><label>상호명 *</label><input id="enCompany" maxlength="${adm ? 100 : 25}" value="${val(e.company)}"></div>
     <div class="field"><label>주요서비스 <span class="helper">(${adm ? '' : '50자 이내'})</span></label><input id="enService" maxlength="${adm ? 200 : 50}" value="${val(e.service)}"></div>
     <div class="field"><label>주소 * <span class="helper">(이 글자를 누르면 네이버 지도로 자동 연결돼요)</span></label><input id="enAddress" maxlength="${adm ? 250 : 250}" value="${val(e.address)}"></div>
@@ -2601,7 +2651,7 @@ function saveEntryEdit(id, nid){
   let mapUrl = e.mapUrl || '';
   if(adm){ mapUrl = v('enMap') || sp.url; if(mapUrl && !safeMapUrl(mapUrl)){ showToast('지도 링크는 네이버·카카오·구글 지도 주소만 쓸 수 있어요'); return; } }
   else if(address !== e.address) mapUrl = '';
-  const upd = { category: v('enCat'), company, service, address, mapUrl: mapUrl || '', editedAt: Date.now() };
+  const upd = { category: entryCatValue(), company, service, address, mapUrl: mapUrl || '', editedAt: Date.now() };
   if(adm){ upd.name = v('enName') || e.name; upd.batch = Number(v('enBatch')) || ''; }
   db.collection('noticeEntries').doc(id).update(upd).then(() => showToast('수정했어요')).catch(() => showToast('수정 실패, 다시 시도해주세요'));
   logActivity('등록 명단 수정', company);
