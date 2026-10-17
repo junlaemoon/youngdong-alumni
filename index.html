@@ -2388,51 +2388,7 @@ function entryAddrCell(e){
     return h ? `<a href="${esc(h)}" target="_blank" rel="noopener noreferrer" style="color:#1D4ED8; text-decoration:underline;">📍 지도 보기</a>` : '(주소 미입력)';
   }
   const href = safeMapUrl(e.mapUrl) || ('https://map.naver.com/p/search/' + encodeURIComponent(e.address || ''));
-  const sh = shortAddr(e.address);
-  const lnk = (t) => `<a href="${esc(href)}" target="_blank" rel="noopener noreferrer" title="${esc(e.address)}" style="color:#1D4ED8; text-decoration:underline;">${esc(t)}</a>`;
-  if(sh) return lnk(sh);                       // 시·구·동만 짧게 (지도 링크는 전체 주소 기준)
-  return String(e.address).length > ENTRY_MORE_AT ? entryClip(e.address, href) : lnk(e.address);
-}
-// 표에는 짧게: 서울은 '구 동', 서울 외는 '시 구 동'. 동 정보가 없는 도로명주소는 도로명으로 대신 표시. 해석 불가 시 원문.
-function shortAddr(addr){
-  const t = String(addr || '').replace(/\([^)]*\)/g, ' ').replace(/[,，]/g, ' ').replace(/\s+/g, ' ').trim();
-  if(!t) return '';
-  const toks = t.split(' ');
-  const METRO = /^(서울|부산|대구|인천|광주|대전|울산|세종)(특별시|광역시|특별자치시|시)?$/;
-  const PROV = /^(경기|강원|충북|충남|전북|전남|경북|경남|제주|충청북|충청남|전라북|전라남|경상북|경상남|강원특별자치|전북특별자치|제주특별자치)(도)?$/;
-  let i = 0, city = '', metro = false;
-  const m0 = toks[0].match(METRO);
-  if(m0){ city = m0[1]; metro = true; i = 1; }
-  else {
-    if(PROV.test(toks[0])) i = 1;
-    const ct = toks[i];
-    if(!ct || !/[가-힣]{2,}(시|군)$/.test(ct)) return '';
-    city = ct.replace(/(시|군)$/, ''); i++;
-  }
-  let gu = '';
-  if(toks[i] && /[가-힣]+구$/.test(toks[i])){ gu = toks[i].length > 2 ? toks[i].replace(/구$/, '') : toks[i]; i++; }
-  let place = '';
-  for(let k = i; k < toks.length && k < i + 4; k++){
-    const w = toks[k];
-    let m = w.match(/^([가-힣]{2,}동)(?:\d*가)?(?:길|로)?$/);
-    if(m){ place = m[1].replace(/동$/, ''); break; }
-    m = w.match(/^([가-힣]+?(?:대로|로|길))/);
-    if(m){ place = m[1]; break; }
-  }
-  if(metro && !gu && !place) return '';
-  if(!gu && !place && !metro) return city;
-  return (metro ? [gu, place] : [city, gu, place]).filter(Boolean).join(' ');
-}
-function entryClip(text, href){
-  const t = String(text||'');
-  const lnk = (inner) => href ? `<a href="${esc(href)}" target="_blank" rel="noopener noreferrer" style="color:#1D4ED8; text-decoration:underline;">${inner}</a>` : inner;
-  if(t.length <= ENTRY_MORE_AT) return `<span>${lnk(esc(t))}</span>`;
-  return `<span>${lnk(esc(t.slice(0, ENTRY_MORE_AT)) + '…')}</span> <a class="more-link" style="color:#6B7280; cursor:pointer; white-space:nowrap; font-size:11.5px;" data-full="${esc(t)}" data-short="${esc(t.slice(0, ENTRY_MORE_AT))}…" onclick="toggleEntryMore(this)">더보기</a>`;
-}
-function toggleEntryMore(a){
-  const sp = a.previousElementSibling; const inner = sp.querySelector('a') || sp; const open = a.textContent === '접기';
-  inner.textContent = open ? a.getAttribute('data-short') : a.getAttribute('data-full');
-  a.textContent = open ? '더보기' : '접기';
+  return entryClip(e.address, href);
 }
 function entryWho(e){
   const nm = currentMember() ? e.name : maskName(e.name);
@@ -2761,7 +2717,7 @@ function openEntryModal(nid, group){
     ${entryCatFieldHtml(nid, '', window._entryGroup)}
     <div class="field"><label>상호명 *</label><input id="enCompany" placeholder="예: 영동식당" maxlength="25"></div>
     <div class="field"><label>주요서비스 <span class="helper">(선택 · 50자 이내)</span></label><input id="enService" placeholder="예: 한식 · 단체예약 (50자 이내)" maxlength="50"></div>
-    <div class="field"><label>주소 <span class="helper">(선택 · 쓰면 이 글자를 눌러 네이버 지도로 자동 연결돼요)</span></label><input id="enAddress" placeholder="예: 서울 서초구 방배동 123 (전체 주소를 써도 목록에는 짧게 보여요)" maxlength="250"></div>
+    <div class="field"><label>주소 <span class="helper">(선택 · 쓰면 이 글자를 눌러 네이버 지도로 자동 연결돼요)</span></label><input id="enAddress" placeholder="예: 서울 강남구 OO로 12 / 강남구청역 행당점 (50자 이내)" maxlength="250"></div>
     ${isAdmin() ? `<div class="field"><label>지도 링크 직접 지정 <span class="helper">(관리자 전용·선택 — 비우면 자동)</span></label><input id="enMap" placeholder="자동 연결이 엉뚱한 곳일 때만 네이버 지도 공유 링크 입력" maxlength="300"></div>` : ''}
     <button class="btn btn-accent btn-block" onclick="addEntry('${nid}')">등록하기</button>
   `);
