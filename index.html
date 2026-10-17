@@ -301,6 +301,25 @@ main#app{padding:16px 16px 4px;}
 .clamp2.open{max-height:none;}
 .clamp2 .clamp-more{position:absolute; right:0; bottom:0; padding-left:22px; background:linear-gradient(90deg, rgba(255,255,255,0), #fff 45%); color:#6B7280; cursor:pointer; font-size:11.5px; white-space:nowrap;}
 .clamp2.open .clamp-more{position:static; padding-left:6px; background:none;}
+/* 모바일: 표 대신 카드형으로 */
+@media (max-width: 640px){
+  .col-hint{display:none;}
+  .rt-content .entry-table{min-width:0; width:100%; display:block; table-layout:auto;}
+  .entry-table colgroup,.entry-table thead{display:none;}
+  .entry-table tbody{display:block;}
+  .rt-content .entry-table tr{display:grid; grid-template-columns:1fr auto auto; grid-template-areas:"co co acts" "cat who acts" "svc svc svc" "addr addr addr"; column-gap:8px; row-gap:3px; border:1px solid var(--line); border-radius:12px; padding:10px 12px; margin:0 0 8px; background:#fff;}
+  .rt-content .entry-table td{display:block; border:none; padding:0; min-width:0; font-size:13px; word-break:keep-all; overflow-wrap:anywhere;}
+  .rt-content .entry-table td.ec-co{grid-area:co; font-weight:800; font-size:14.5px; color:var(--ink);}
+  .rt-content .entry-table td.ec-cat{grid-area:cat; justify-self:start; font-size:11.5px; color:var(--ink-soft);}
+  .rt-content .entry-table td.ec-who{grid-area:who; justify-self:end; font-size:12px; color:var(--ink-soft);}
+  .rt-content .entry-table td.ec-svc{grid-area:svc; margin-top:2px;}
+  .rt-content .entry-table td.ec-addr{grid-area:addr; font-size:12.5px;}
+  .rt-content .entry-table td.ec-acts{grid-area:acts; align-self:start;}
+  .rt-content .entry-table td:empty{display:none;}
+  .entry-acts .btn{padding:5px 9px; font-size:12px;}
+  .clamp2{max-height:none;}
+  .clamp2:not(.open){max-height:2.9em;}
+}
 .entry-table th{position:relative;}
 .col-rs{position:absolute; top:0; right:-5px; width:12px; height:100%; cursor:col-resize; touch-action:none; z-index:2;}
 .col-rs::after{content:''; position:absolute; left:5px; top:18%; height:64%; width:2px; background:#9CA3AF; border-radius:1px;}
@@ -2388,7 +2407,8 @@ function entryAddrCell(e){
     return h ? `<a href="${esc(h)}" target="_blank" rel="noopener noreferrer" style="color:#1D4ED8; text-decoration:underline;">📍 지도 보기</a>` : '(주소 미입력)';
   }
   const href = safeMapUrl(e.mapUrl) || ('https://map.naver.com/p/search/' + encodeURIComponent(e.address || ''));
-  return entryClip(e.address, href);
+  // 주소 전체를 링크로 보여주되 2줄까지만 (넘치면 더보기)
+  return `<div class="clamp2"><a href="${esc(href)}" target="_blank" rel="noopener noreferrer" style="color:#1D4ED8; text-decoration:underline;">${esc(e.address)}</a><a class="clamp-more" style="display:none;" onclick="toggleClamp(this)">더보기</a></div>`;
 }
 function entryClip(text, href){
   const t = String(text||'');
@@ -2497,7 +2517,7 @@ const ENTRY_GROUP_INFO = {
   '기업·법인': { icon:'🏢', desc:'제조·유통·IT·건설 등 동문이 운영하는 회사예요. 협력·거래·제휴가 필요할 때 연락해 보세요.' },
   '미분류': { icon:'📂', desc:'분야를 확인 중인 업체예요. 관리자가 곧 정리해요.' },
 };
-const ENTRY_COLS_DEFAULT = [9, 17, 44, 14, 16];
+const ENTRY_COLS_DEFAULT = [9, 16, 40, 13, 22];
 function entryColsNow(){ const c = state.entryCols; return (c && c.length === 5) ? c : ENTRY_COLS_DEFAULT; }
 let entryColDragging = false;
 function entryTableHtml(list, nid, g, canAct){
@@ -2510,7 +2530,7 @@ function entryTableHtml(list, nid, g, canAct){
   return (adm ? `<div class="col-hint">↔ 제목줄의 칸 경계를 좌우로 끌어서 칸 너비를 조정하세요 (모든 회원 화면에 적용) · <a onclick="resetEntryCols()">처음 크기로</a></div>` : '') + `<div class="rt-wrap"><div class="rt-content"><table class="entry-table">
       <colgroup>${w.map(x => `<col style="width:${x}">`).join('')}${hasActs ? '<col style="width:11%">' : ''}</colgroup>
       <thead><tr>${th}${hasActs ? '<th></th>' : ''}</tr></thead>
-      <tbody>${list.map(e => `<tr><td>${esc((e.category||'').trim() || '미분류')}</td><td>${esc(e.company)}</td><td>${entryClamp(e.service)}</td><td>${entryWho(e)}</td><td>${entryAddrCell(e)}</td>${hasActs ? `<td>${canAct(e) ? `<div class="entry-acts"><button class="btn btn-ghost" onclick="openEntryEditModal('${e.id}','${nid}')">수정</button><button class="btn btn-ghost" onclick="deleteEntry('${e.id}','${nid}')">삭제</button></div>` : ''}</td>` : ''}</tr>`).join('')}</tbody>
+      <tbody>${list.map(e => `<tr><td class="ec-cat">${esc((e.category||'').trim() || '미분류')}</td><td class="ec-co">${esc(e.company)}</td><td class="ec-svc">${entryClamp(e.service)}</td><td class="ec-who">${entryWho(e)}</td><td class="ec-addr">${entryAddrCell(e)}</td>${hasActs ? `<td class="ec-acts">${canAct(e) ? `<div class="entry-acts"><button class="btn btn-ghost" onclick="openEntryEditModal('${e.id}','${nid}')">수정</button><button class="btn btn-ghost" onclick="deleteEntry('${e.id}','${nid}')">삭제</button></div>` : ''}</td>` : ''}</tr>`).join('')}</tbody>
     </table></div></div>`;
 }
 function entryColDrag(ev){
