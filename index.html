@@ -2390,6 +2390,17 @@ function entryAddrCell(e){
   const href = safeMapUrl(e.mapUrl) || ('https://map.naver.com/p/search/' + encodeURIComponent(e.address || ''));
   return entryClip(e.address, href);
 }
+function entryClip(text, href){
+  const t = String(text||'');
+  const lnk = (inner) => href ? `<a href="${esc(href)}" target="_blank" rel="noopener noreferrer" style="color:#1D4ED8; text-decoration:underline;">${inner}</a>` : inner;
+  if(t.length <= ENTRY_MORE_AT) return `<span>${lnk(esc(t))}</span>`;
+  return `<span>${lnk(esc(t.slice(0, ENTRY_MORE_AT)) + '…')}</span> <a class="more-link" style="color:#6B7280; cursor:pointer; white-space:nowrap; font-size:11.5px;" data-full="${esc(t)}" data-short="${esc(t.slice(0, ENTRY_MORE_AT))}…" onclick="toggleEntryMore(this)">더보기</a>`;
+}
+function toggleEntryMore(a){
+  const sp = a.previousElementSibling; const inner = sp.querySelector('a') || sp; const open = a.textContent === '접기';
+  inner.textContent = open ? a.getAttribute('data-short') : a.getAttribute('data-full');
+  a.textContent = open ? '더보기' : '접기';
+}
 function entryWho(e){
   const nm = currentMember() ? e.name : maskName(e.name);
   return (e.batch ? `<span style="white-space:nowrap;">${esc(e.batch)}회</span> ` : '') + `<span style="white-space:nowrap;">${esc(nm)}</span>`;
