@@ -294,8 +294,21 @@ main#app{padding:16px 16px 4px;}
 }
 .rt-content td.rt-sel, .rt-content th.rt-sel{outline:2px solid #2563EB; outline-offset:-2px;}
 .rt-area table{table-layout:auto;}
-.entry-table{table-layout:fixed; width:100%; min-width:520px;}
-.entry-table td,.entry-table th{word-break:break-all; font-size:12.5px;}
+/* 업체 명단 표: 칸은 줄이고 주요서비스 칸을 넓게 */
+.entry-table{table-layout:fixed; width:100%; min-width:560px;}
+.entry-table td,.entry-table th{word-break:keep-all; overflow-wrap:anywhere; font-size:12.5px; padding:6px 6px; line-height:1.45;}
+.clamp2{position:relative; line-height:1.45; max-height:2.9em; overflow:hidden;}
+.clamp2.open{max-height:none;}
+.clamp2 .clamp-more{position:absolute; right:0; bottom:0; padding-left:22px; background:linear-gradient(90deg, rgba(255,255,255,0), #fff 45%); color:#6B7280; cursor:pointer; font-size:11.5px; white-space:nowrap;}
+.clamp2.open .clamp-more{position:static; padding-left:6px; background:none;}
+.entry-table th{position:relative;}
+.col-rs{position:absolute; top:0; right:-5px; width:12px; height:100%; cursor:col-resize; touch-action:none; z-index:2;}
+.col-rs::after{content:''; position:absolute; left:5px; top:18%; height:64%; width:2px; background:#9CA3AF; border-radius:1px;}
+.col-rs:hover::after{background:#2563EB;}
+.col-hint{font-size:11.5px; color:#6B7280; margin:2px 0 4px;}
+.col-hint a{color:#1D4ED8; cursor:pointer; text-decoration:underline;}
+.entry-acts{display:flex; flex-direction:column; gap:3px; align-items:stretch;}
+.entry-acts .btn{padding:3px 4px; font-size:11px; border-radius:7px; line-height:1.2;}
 </style>
 </head>
 <body>
@@ -592,6 +605,13 @@ async function init(){
       state.features = Object.assign({ deals: false }, d.exists ? d.data() : {});
       if(!state.features.deals && state.tab === 'deals') state.tab = 'notice';
       if(state.loaded){ renderTabs(); if(!modalIsOpen()) renderApp(); }
+    }, () => {});
+  }catch(e){}
+  try{
+    db.collection('meta').doc('entryCols').onSnapshot(d => {
+      const c = d.exists ? d.data().cols : null;
+      state.entryCols = (Array.isArray(c) && c.length === 5 && c.every(x => typeof x === 'number' && x > 0)) ? c : null;
+      if(state.loaded && !entryColDragging){ document.querySelectorAll('.entries-box[data-nid]').forEach(b => renderEntryBoxes(b.getAttribute('data-nid'))); }
     }, () => {});
   }catch(e){}
   ['notice','feed','schedule','deals'].forEach(kind => {
@@ -2368,7 +2388,40 @@ function entryAddrCell(e){
     return h ? `<a href="${esc(h)}" target="_blank" rel="noopener noreferrer" style="color:#1D4ED8; text-decoration:underline;">📍 지도 보기</a>` : '(주소 미입력)';
   }
   const href = safeMapUrl(e.mapUrl) || ('https://map.naver.com/p/search/' + encodeURIComponent(e.address || ''));
-  return entryClip(e.address, href);
+  const sh = shortAddr(e.address);
+  const lnk = (t) => `<a href="${esc(href)}" target="_blank" rel="noopener noreferrer" title="${esc(e.address)}" style="color:#1D4ED8; text-decoration:underline;">${esc(t)}</a>`;
+  if(sh) return lnk(sh);                       // 시·구·동만 짧게 (지도 링크는 전체 주소 기준)
+  return String(e.address).length > ENTRY_MORE_AT ? entryClip(e.address, href) : lnk(e.address);
+}
+// 표에는 짧게: 서울은 '구 동', 서울 외는 '시 구 동'. 동 정보가 없는 도로명주소는 도로명으로 대신 표시. 해석 불가 시 원문.
+function shortAddr(addr){
+  const t = String(addr || '').replace(/\([^)]*\)/g, ' ').replace(/[,，]/g, ' ').replace(/\s+/g, ' ').trim();
+  if(!t) return '';
+  const toks = t.split(' ');
+  const METRO = /^(서울|부산|대구|인천|광주|대전|울산|세종)(특별시|광역시|특별자치시|시)?$/;
+  const PROV = /^(경기|강원|충북|충남|전북|전남|경북|경남|제주|충청북|충청남|전라북|전라남|경상북|경상남|강원특별자치|전북특별자치|제주특별자치)(도)?$/;
+  let i = 0, city = '', metro = false;
+  const m0 = toks[0].match(METRO);
+  if(m0){ city = m0[1]; metro = true; i = 1; }
+  else {
+    if(PROV.test(toks[0])) i = 1;
+    const ct = toks[i];
+    if(!ct || !/[가-힣]{2,}(시|군)$/.test(ct)) return '';
+    city = ct.replace(/(시|군)$/, ''); i++;
+  }
+  let gu = '';
+  if(toks[i] && /[가-힣]+구$/.test(toks[i])){ gu = toks[i].length > 2 ? toks[i].replace(/구$/, '') : toks[i]; i++; }
+  let place = '';
+  for(let k = i; k < toks.length && k < i + 4; k++){
+    const w = toks[k];
+    let m = w.match(/^([가-힣]{2,}동)(?:\d*가)?(?:길|로)?$/);
+    if(m){ place = m[1].replace(/동$/, ''); break; }
+    m = w.match(/^([가-힣]+?(?:대로|로|길))/);
+    if(m){ place = m[1]; break; }
+  }
+  if(metro && !gu && !place) return '';
+  if(!gu && !place && !metro) return city;
+  return (metro ? [gu, place] : [city, gu, place]).filter(Boolean).join(' ');
 }
 function entryClip(text, href){
   const t = String(text||'');
@@ -2382,9 +2435,25 @@ function toggleEntryMore(a){
   a.textContent = open ? '더보기' : '접기';
 }
 function entryWho(e){
-  const label = (e.batch ? e.batch + '회 ' : '') + (currentMember() ? e.name : maskName(e.name));
-  return esc(label);
+  const nm = currentMember() ? e.name : maskName(e.name);
+  return (e.batch ? `<span style="white-space:nowrap;">${esc(e.batch)}회</span> ` : '') + `<span style="white-space:nowrap;">${esc(nm)}</span>`;
 }
+// 주요서비스: 2줄까지만 보이고, 넘치면 2째 줄 끝에 '더보기'
+function entryClamp(text){
+  const t = String(text || '').trim();
+  if(!t) return '';
+  return `<div class="clamp2"><span>${esc(t)}</span><a class="clamp-more" style="display:none;" onclick="toggleClamp(this)">더보기</a></div>`;
+}
+function toggleClamp(a){ const p = a.parentElement; p.classList.toggle('open'); a.textContent = p.classList.contains('open') ? '접기' : '더보기'; }
+function fixClamps(){
+  document.querySelectorAll('.clamp2').forEach(c => {
+    const a = c.querySelector('.clamp-more'); if(!a) return;
+    if(c.classList.contains('open')){ a.style.display = ''; return; }
+    a.style.display = 'none';
+    a.style.display = (c.scrollHeight > c.clientHeight + 1) ? '' : 'none';
+  });
+}
+let _clampT; window.addEventListener('resize', () => { clearTimeout(_clampT); _clampT = setTimeout(fixClamps, 150); });
 const ENTRY_CATS = ['식당','카페','휴대폰','금은방·귀금속','자동차·정비','미용·뷰티','교육·학원','병원·의료','건강검진','법률·세무','건설·부동산','제조·유통','IT·서비스','금융·보험','기타'];
 const ENTRY_GROUPS = ['생활·자영업','전문직','기업·법인'];
 const entryGroupSel = {};
@@ -2461,13 +2530,61 @@ const ENTRY_GROUP_INFO = {
   '기업·법인': { icon:'🏢', desc:'제조·유통·IT·건설 등 동문이 운영하는 회사예요. 협력·거래·제휴가 필요할 때 연락해 보세요.' },
   '미분류': { icon:'📂', desc:'분야를 확인 중인 업체예요. 관리자가 곧 정리해요.' },
 };
+const ENTRY_COLS_DEFAULT = [9, 17, 44, 14, 16];
+function entryColsNow(){ const c = state.entryCols; return (c && c.length === 5) ? c : ENTRY_COLS_DEFAULT; }
+let entryColDragging = false;
 function entryTableHtml(list, nid, g, canAct){
   const hasActs = list.some(canAct);
-  return `<div class="rt-wrap"><div class="rt-content"><table class="entry-table">
-      <colgroup>${hasActs ? '<col style="width:10%"><col style="width:19%"><col style="width:24%"><col style="width:14%"><col style="width:20%"><col style="width:13%">' : '<col style="width:11%"><col style="width:22%"><col style="width:27%"><col style="width:15%"><col style="width:25%">'}</colgroup>
-      <thead><tr><th>업종</th><th>상호명</th><th>주요서비스</th><th>기수·성함</th><th>주소 (클릭시 지도링크)</th>${hasActs ? '<th></th>' : ''}</tr></thead>
-      <tbody>${list.map(e => `<tr><td>${esc((e.category||'').trim() || '미분류')}</td><td>${esc(e.company)}</td><td>${entryClip(e.service)}</td><td>${entryWho(e)}</td><td>${entryAddrCell(e)}</td>${hasActs ? `<td>${canAct(e) ? `<button class="btn btn-ghost btn-sm" onclick="openEntryEditModal('${e.id}','${nid}')">수정</button> <button class="btn btn-ghost btn-sm" onclick="deleteEntry('${e.id}','${nid}')">삭제</button>` : ''}</td>` : ''}</tr>`).join('')}</tbody>
+  const scale = hasActs ? 0.91 : 1;
+  const w = entryColsNow().map(x => (x * scale).toFixed(2) + '%');
+  const adm = isAdmin();
+  const heads = ['업종','상호명','주요서비스','기수·성함','주소 (클릭시 지도링크)'];
+  const th = heads.map((h, i) => `<th>${h}${adm && i < 4 ? `<span class="col-rs" data-i="${i}" onpointerdown="entryColDrag(event)" title="드래그해서 칸 너비 조정"></span>` : ''}</th>`).join('');
+  return (adm ? `<div class="col-hint">↔ 제목줄의 칸 경계를 좌우로 끌어서 칸 너비를 조정하세요 (모든 회원 화면에 적용) · <a onclick="resetEntryCols()">처음 크기로</a></div>` : '') + `<div class="rt-wrap"><div class="rt-content"><table class="entry-table">
+      <colgroup>${w.map(x => `<col style="width:${x}">`).join('')}${hasActs ? '<col style="width:9%">' : ''}</colgroup>
+      <thead><tr>${th}${hasActs ? '<th></th>' : ''}</tr></thead>
+      <tbody>${list.map(e => `<tr><td>${esc((e.category||'').trim() || '미분류')}</td><td>${esc(e.company)}</td><td>${entryClamp(e.service)}</td><td>${entryWho(e)}</td><td>${entryAddrCell(e)}</td>${hasActs ? `<td>${canAct(e) ? `<div class="entry-acts"><button class="btn btn-ghost" onclick="openEntryEditModal('${e.id}','${nid}')">수정</button><button class="btn btn-ghost" onclick="deleteEntry('${e.id}','${nid}')">삭제</button></div>` : ''}</td>` : ''}</tr>`).join('')}</tbody>
     </table></div></div>`;
+}
+function entryColDrag(ev){
+  ev.preventDefault(); ev.stopPropagation();
+  const h = ev.currentTarget, i = +h.getAttribute('data-i');
+  const table = h.closest('table'); const tw = table.getBoundingClientRect().width;
+  const hasActs = table.querySelectorAll('thead th').length > 5;
+  const scale = hasActs ? 0.91 : 1;
+  const start = entryColsNow().slice(); const x0 = ev.clientX;
+  const MIN = 5;
+  let cur = start.slice();
+  entryColDragging = true;
+  try{ h.setPointerCapture(ev.pointerId); }catch(e){}
+  const apply = () => {
+    document.querySelectorAll('.entry-table').forEach(t => {
+      const hs = t.querySelectorAll('thead th').length > 5 ? 0.91 : 1;
+      const cols = t.querySelectorAll('col');
+      cur.forEach((v, k) => { if(cols[k]) cols[k].style.width = (v * hs).toFixed(2) + '%'; });
+    });
+  };
+  const move = e => {
+    let d = (e.clientX - x0) / tw * 100 / scale;
+    d = Math.max(MIN - start[i], Math.min(start[i + 1] - MIN, d));
+    cur = start.slice(); cur[i] = start[i] + d; cur[i + 1] = start[i + 1] - d;
+    apply();
+  };
+  const up = () => {
+    h.removeEventListener('pointermove', move); h.removeEventListener('pointerup', up); h.removeEventListener('pointercancel', up);
+    entryColDragging = false;
+    const out = cur.map(x => Math.round(x * 10) / 10);
+    state.entryCols = out;
+    db.collection('meta').doc('entryCols').set({ cols: out }).catch(() => showToast('저장 실패, 다시 시도해주세요'));
+    setTimeout(fixClamps, 0);
+  };
+  h.addEventListener('pointermove', move); h.addEventListener('pointerup', up); h.addEventListener('pointercancel', up);
+}
+function resetEntryCols(){
+  if(!confirm('칸 너비를 처음 크기로 되돌릴까요?')) return;
+  state.entryCols = null;
+  db.collection('meta').doc('entryCols').delete().catch(()=>{});
+  document.querySelectorAll('.entries-box[data-nid]').forEach(b => renderEntryBoxes(b.getAttribute('data-nid')));
 }
 function entryBoxHtml(nid, g, items){
   const info = ENTRY_GROUP_INFO[g];
@@ -2502,6 +2619,7 @@ function renderEntryBoxes(nid){
     ${admin && all.length ? `<button class="btn btn-ghost btn-block" onclick="exportEntries('${nid}')">⬇ 등록 명단 엑셀</button>` : ''}
   `;
   document.querySelectorAll(`.entries-box[data-nid="${nid}"]`).forEach(b => { b.innerHTML = html; });
+  fixClamps();
 }
 function entriesBoxHtml(n){
   return n.entriesEnabled ? `<div class="entries-box" data-nid="${n.id}"><p class="helper">불러오는 중…</p></div>` : '';
@@ -2643,7 +2761,7 @@ function openEntryModal(nid, group){
     ${entryCatFieldHtml(nid, '', window._entryGroup)}
     <div class="field"><label>상호명 *</label><input id="enCompany" placeholder="예: 영동식당" maxlength="25"></div>
     <div class="field"><label>주요서비스 <span class="helper">(선택 · 50자 이내)</span></label><input id="enService" placeholder="예: 한식 · 단체예약 (50자 이내)" maxlength="50"></div>
-    <div class="field"><label>주소 <span class="helper">(선택 · 쓰면 이 글자를 눌러 네이버 지도로 자동 연결돼요)</span></label><input id="enAddress" placeholder="예: 서울 강남구 OO로 12 / 강남구청역 행당점 (50자 이내)" maxlength="250"></div>
+    <div class="field"><label>주소 <span class="helper">(선택 · 쓰면 이 글자를 눌러 네이버 지도로 자동 연결돼요)</span></label><input id="enAddress" placeholder="예: 서울 서초구 방배동 123 (전체 주소를 써도 목록에는 짧게 보여요)" maxlength="250"></div>
     ${isAdmin() ? `<div class="field"><label>지도 링크 직접 지정 <span class="helper">(관리자 전용·선택 — 비우면 자동)</span></label><input id="enMap" placeholder="자동 연결이 엉뚱한 곳일 때만 네이버 지도 공유 링크 입력" maxlength="300"></div>` : ''}
     <button class="btn btn-accent btn-block" onclick="addEntry('${nid}')">등록하기</button>
   `);
