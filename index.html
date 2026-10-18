@@ -884,8 +884,20 @@ function logVisit(){
   try{ localStorage.setItem(key, String(now)); }catch(e){}
   const inc = firebase.firestore.FieldValue.increment(1);
   const dailyRef = db.collection('visitDaily').doc(today);
+  // 유입 분석용 부가 집계 (시간대 / 기기 / 접속방식 / 유입경로)
+  let extra = {};
+  try{
+    const ua = navigator.userAgent || '';
+    const hh = String(new Date().getHours()).padStart(2, '0');
+    const dev = /Android|iPhone|iPad|iPod|Mobile/i.test(ua) ? 'mobile' : 'pc';
+    const standalone = (window.matchMedia && window.matchMedia('(display-mode: standalone)').matches) || window.navigator.standalone === true;
+    let ref = ''; try{ ref = new URL(document.referrer).hostname; }catch(e){}
+    const src = /KAKAOTALK/i.test(ua) ? 'kakao' : /NAVER\(inapp/i.test(ua) || /naver\./i.test(ref) ? 'naver'
+      : /google\./i.test(ref) ? 'google' : (!ref || ref === location.hostname) ? 'direct' : 'other';
+    extra = { hours: { [hh]: inc }, dev: { [dev]: inc }, via: { [standalone ? 'app' : 'web']: inc }, src: { [src]: inc } };
+  }catch(e){ extra = {}; }
   if(!me){
-    dailyRef.set({ date: today, anonVisits: inc }, { merge: true }).catch(()=>{});
+    dailyRef.set(Object.assign({ date: today, anonVisits: inc }, extra), { merge: true }).catch(()=>{});
     return;
   }
   const dayRef = db.collection('visitLog').doc(me.id + '_' + today);
@@ -894,10 +906,10 @@ function logVisit(){
     const snap = await tx.get(dayRef);
     if(!snap.exists){
       tx.set(dayRef, { memberId: me.id, date: today, count: 1, firstAt: now, lastAt: now });
-      tx.set(dailyRef, { date: today, visitors: inc, visits: inc }, { merge: true });
+      tx.set(dailyRef, Object.assign({ date: today, visitors: inc, visits: inc }, extra), { merge: true });
     } else {
       tx.update(dayRef, { count: inc, lastAt: now });
-      tx.set(dailyRef, { date: today, visits: inc }, { merge: true });
+      tx.set(dailyRef, Object.assign({ date: today, visits: inc }, extra), { merge: true });
     }
     tx.set(totalRef, { memberId: me.id, count: inc, lastAt: now, lastDate: today }, { merge: true });
   }).catch(e => console.error('[visit]', e));
@@ -924,36 +936,185 @@ function statRow(cells, opts){
   const style = `display:grid; grid-template-columns:${cols}; gap:6px; align-items:center; padding:8px 4px; border-bottom:1px solid var(--line); font-size:${opts.head ? '11px' : '12.5px'};${opts.head ? ' font-weight:700; color:var(--ink-soft);' : ''}${opts.onclick ? ' cursor:pointer;' : ''}`;
   return `<div style="${style}"${opts.onclick ? ` onclick="${opts.onclick}"` : ''}>${cells.map(c => `<span>${c}</span>`).join('')}</div>`;
 }
+let statsRange = { days: 14, offset: 0 };
+let statsCache = {};
+function statsFetch(key, fn){
+  const c = statsCache[key];
+  if(c && Date.now() - c.at < 60000) return Promise.resolve(c.v);
+  return fn().then(v => { statsCache[key] = { at: Date.now(), v }; return v; });
+}
+const statsDaily = () => statsFetch('daily', async () => {
+  const snap = await db.collection('visitDaily').orderBy('date', 'desc').limit(120).get();
+  const map = {}; snap.docs.forEach(d => { const r = d.data(); map[r.date] = r; }); return map;
+});
+const statsTotals = () => statsFetch('totals', async () => {
+  const snap = await db.collection('visitTotals').orderBy('count', 'desc').limit(1000).get();
+  return snap.docs.map(d => d.data());
+});
+function shiftDate(dateStr, delta){ const d = new Date(dateStr + 'T00:00:00'); d.setDate(d.getDate() + delta); return ymd(d); }
+function statBig(v, label, sub){
+  return `<div><div class="disp" style="font-size:21px; font-weight:800;">${v}</div><div class="req-sub">${label}</div>${sub ? `<div style="font-size:11px; margin-top:1px;">${sub}</div>` : ''}</div>`;
+}
+function deltaHtml(cur, prev){
+  if(!prev && !cur) return '';
+  if(!prev) return '<span style="color:#15803D;">▲ 신규</span>';
+  const pct = Math.round((cur - prev) / prev * 100);
+  return pct === 0 ? '<span style="color:#6B7280;">― 변동 없음</span>' : pct > 0 ? `<span style="color:#15803D;">▲ ${pct}%</span>` : `<span style="color:#B91C1C;">▼ ${Math.abs(pct)}%</span>`;
+}
+// 막대 차트(SVG)
+function svgBars(values, labels, opts){
+  opts = opts || {};
+  const W = 340, H = opts.h || 130, padL = 24, padB = 20, padT = 8;
+  const max = Math.max(1, ...values);
+  const n = values.length, bw = (W - padL) / n;
+  const bars = values.map((v, i) => {
+    const h = (H - padB - padT) * v / max;
+    const x = padL + i * bw + bw * 0.15, y = H - padB - h;
+    const lab = labels[i];
+    return `<g><title>${esc(lab)} · ${v}${opts.unit || ''}</title><rect x="${x.toFixed(1)}" y="${y.toFixed(1)}" width="${(bw*0.7).toFixed(1)}" height="${Math.max(h, v ? 1.5 : 0).toFixed(1)}" rx="2" fill="${opts.color || '#2F6FED'}"></rect></g>`;
+  }).join('');
+  const step = Math.max(1, Math.ceil(n / (opts.maxLabels || 7)));
+  const xl = labels.map((l, i) => i % step === 0 || i === n - 1 ? `<text x="${(padL + i*bw + bw/2).toFixed(1)}" y="${H - 5}" font-size="9" fill="#6B7280" text-anchor="middle">${esc(l)}</text>` : '').join('');
+  const grid = [0, 0.5, 1].map(f => { const y = H - padB - (H - padB - padT) * f; return `<line x1="${padL}" x2="${W}" y1="${y}" y2="${y}" stroke="#E5E7EB" stroke-width="1"/><text x="${padL - 3}" y="${y + 3}" font-size="9" fill="#9CA3AF" text-anchor="end">${Math.round(max * f)}</text>`; }).join('');
+  return `<svg viewBox="0 0 ${W} ${H}" style="width:100%; height:auto; display:block;">${grid}${bars}${xl}</svg>`;
+}
+// 가로 비율 막대
+function hBars(items, total, color){
+  total = total || items.reduce((s, i) => s + i.v, 0);
+  if(!total) return '<p class="helper">아직 집계된 데이터가 없어요. (이 기능을 켠 이후 방문부터 쌓여요)</p>';
+  return items.map(i => {
+    const pct = Math.round(i.v / total * 100);
+    return `<div style="margin:6px 0;"><div style="display:flex; justify-content:space-between; font-size:12.5px;"><span>${esc(i.label)}</span><span class="req-sub">${i.v}${i.unit || '회'} · ${pct}%</span></div><div style="height:8px; background:#EEF2F8; border-radius:4px; overflow:hidden;"><div style="width:${pct}%; height:100%; background:${color || '#2F6FED'};"></div></div></div>`;
+  }).join('');
+}
 function openStatsModal(tab){
   if(!isAdmin()) return;
   tab = tab || 'daily';
-  const btn = (id, label) => `<button class="btn ${tab===id ? 'btn-primary' : 'btn-ghost'} btn-sm" onclick="openStatsModal('${id}')">${label}</button>`;
+  const btn = (id, label) => `<button class="btn ${tab===id ? 'btn-primary' : 'btn-ghost'} btn-sm" style="white-space:nowrap;" onclick="openStatsModal('${id}')">${label}</button>`;
   openModal('이용 통계', `
-    <div style="display:flex; gap:6px; margin-bottom:12px;">${btn('daily','일별 방문')}${btn('views','조회수')}${btn('people','회원별')}</div>
+    <div style="display:flex; gap:6px; margin-bottom:12px; overflow-x:auto; padding-bottom:2px;">${btn('daily','일간 현황')}${btn('analysis','방문 분석')}${btn('members','회원 분석')}${btn('views','조회수 순위')}${btn('people','회원별')}</div>
     <div id="statsBody"><p class="helper">불러오는 중…</p></div>
   `, true);
   loadStatsBody(tab);
 }
+function statsShift(dir){ statsRange.offset = Math.max(0, statsRange.offset + dir); loadStatsBody('daily'); }
+function statsSetDays(n){ statsRange = { days: n, offset: 0 }; loadStatsBody('daily'); }
 async function loadStatsBody(tab){
   const body = () => document.getElementById('statsBody');
   const fail = (e) => { console.error(e); if(body()) body().innerHTML = '<p class="helper">통계를 불러오지 못했어요. Firestore 보안규칙에 통계용 컬렉션이 추가됐는지 확인해주세요.</p>'; };
   try{
     if(tab === 'daily'){
-      const snap = await db.collection('visitDaily').orderBy('date', 'desc').limit(30).get();
-      const rows = snap.docs.map(d => d.data());
+      const map = await statsDaily();
+      const days = statsRange.days, off = statsRange.offset;
       const today = ymd(new Date());
-      const t = rows.find(r => r.date === today) || {};
-      const sumVisits = rows.reduce((s, r) => s + (r.visits || 0), 0);
+      const end = shiftDate(today, -off * days);
+      const dates = []; for(let i = days - 1; i >= 0; i--) dates.push(shiftDate(end, -i));
+      const prevDates = dates.map(d => shiftDate(d, -days));
+      const sum = (ds, k) => ds.reduce((t, d) => t + ((map[d] || {})[k] || 0), 0);
+      const visits = sum(dates, 'visits'), pVisits = sum(prevDates, 'visits');
+      const visitors = sum(dates, 'visitors'), pVisitors = sum(prevDates, 'visitors');
+      const anon = sum(dates, 'anonVisits'), pAnon = sum(prevDates, 'anonVisits');
+      const t = map[today] || {};
+      const lab = d => `${Number(d.slice(5,7))}/${Number(d.slice(8))}`;
+      const chip = (n) => `<button class="btn ${days === n ? 'btn-primary' : 'btn-ghost'} btn-sm" style="padding:3px 10px;" onclick="statsSetDays(${n})">${n}일</button>`;
       if(!body()) return;
       body().innerHTML = `
-        <div class="card" style="display:grid; grid-template-columns:1fr 1fr 1fr; gap:10px; text-align:center;">
-          <div><div class="disp" style="font-size:20px; font-weight:800;">${t.visitors || 0}</div><div class="req-sub">오늘 방문 회원</div></div>
-          <div><div class="disp" style="font-size:20px; font-weight:800;">${t.visits || 0}</div><div class="req-sub">오늘 방문 횟수</div></div>
-          <div><div class="disp" style="font-size:20px; font-weight:800;">${sumVisits}</div><div class="req-sub">최근30일 방문횟수</div></div>
+        <div style="display:flex; align-items:center; justify-content:space-between; gap:8px; margin-bottom:8px;">
+          <div style="display:flex; align-items:center; gap:6px;">
+            <button class="btn btn-ghost btn-sm" onclick="statsShift(1)">◀</button>
+            <b style="font-size:13px;">${lab(dates[0])} ~ ${lab(dates[dates.length-1])}</b>
+            <button class="btn btn-ghost btn-sm" ${off === 0 ? 'disabled' : ''} onclick="statsShift(-1)">▶</button>
+          </div>
+          <div style="display:flex; gap:4px;">${chip(7)}${chip(14)}${chip(30)}</div>
         </div>
-        <p class="helper">방문 = 같은 기기에서 30분 이상 간격으로 접속한 횟수예요. 비로그인은 기기 기준이라 정확한 인원이 아니에요.</p>
+        <div class="card" style="display:grid; grid-template-columns:repeat(4,1fr); gap:6px; text-align:center; padding:12px 8px;">
+          ${statBig(visits, '방문 횟수', deltaHtml(visits, pVisits))}
+          ${statBig(visitors, '방문 회원', deltaHtml(visitors, pVisitors))}
+          ${statBig(anon, '비로그인', deltaHtml(anon, pAnon))}
+          ${statBig((visits / days).toFixed(1), '일평균', '')}
+        </div>
+        <p class="helper" style="margin:0 0 4px;">오늘: 방문 회원 ${t.visitors || 0}명 · 방문 ${t.visits || 0}회 · 비로그인 ${t.anonVisits || 0}회 (증감은 직전 ${days}일 대비)</p>
+        <div class="card" style="padding:10px 8px;">
+          <p class="section-title" style="margin:0 0 4px 4px;">일자별 방문 횟수</p>
+          ${svgBars(dates.map(d => (map[d] || {}).visits || 0), dates.map(lab), { unit: '회' })}
+        </div>
+        <p class="helper">방문 = 같은 기기에서 30분 이상 간격으로 접속한 횟수예요. 방문 회원은 일별 합계(여러 날 오면 중복 포함)예요. 비로그인은 기기 기준이라 정확한 인원이 아니에요.</p>
         ${statRow(['날짜','방문 회원','방문 횟수','비로그인'], { head: true, cols: '1.3fr 1fr 1fr 1fr' })}
-        ${rows.length ? rows.map(r => statRow([esc(r.date), (r.visitors||0)+'명', (r.visits||0)+'회', (r.anonVisits||0)+'회'], { cols: '1.3fr 1fr 1fr 1fr' })).join('') : '<p class="helper">아직 기록이 없어요</p>'}
+        ${dates.slice().reverse().map(d => { const r = map[d] || {}; return statRow([esc(d), (r.visitors||0)+'명', (r.visits||0)+'회', (r.anonVisits||0)+'회'], { cols: '1.3fr 1fr 1fr 1fr' }); }).join('')}
+      `;
+    } else if(tab === 'analysis'){
+      const map = await statsDaily();
+      const today = ymd(new Date());
+      const dates = []; for(let i = 29; i >= 0; i--) dates.push(shiftDate(today, -i));
+      const rows = dates.map(d => map[d]).filter(Boolean);
+      const agg = (field, keys) => keys.map(k => rows.reduce((t, r) => t + (((r[field]||{})[k]) || 0), 0));
+      const hrs = Array.from({length: 24}, (_, i) => String(i).padStart(2, '0'));
+      const hv = agg('hours', hrs);
+      // 요일: 최근 120일 전체에서 요일별 평균 방문 횟수
+      const dowSum = [0,0,0,0,0,0,0], dowCnt = [0,0,0,0,0,0,0];
+      Object.keys(map).forEach(d => { const w = new Date(d + 'T00:00:00').getDay(); dowSum[w] += (map[d].visits || 0) + (map[d].anonVisits || 0); dowCnt[w]++; });
+      const dow = dowSum.map((v, i) => dowCnt[i] ? +(v / dowCnt[i]).toFixed(1) : 0);
+      const DN = ['일','월','화','수','목','금','토'];
+      const dv = agg('dev', ['mobile','pc']), vv = agg('via', ['app','web']);
+      const sv = agg('src', ['kakao','naver','google','direct','other']);
+      const peak = hv.indexOf(Math.max(...hv));
+      if(!body()) return;
+      body().innerHTML = `
+        <p class="helper" style="margin-top:0;">최근 30일 기준이에요. 시간대·기기·유입 정보는 이 기능이 켜진 이후 방문부터 쌓여요.</p>
+        <div class="card" style="padding:10px 8px;">
+          <p class="section-title" style="margin:0 0 4px 4px;">시간대별 방문 ${hv.some(Boolean) ? `<span class="req-sub">· 가장 붐비는 시간 ${peak}시대</span>` : ''}</p>
+          ${hv.some(Boolean) ? svgBars(hv, hrs.map(h => h + '시'), { unit: '회', maxLabels: 8, color: '#E8B04B' }) : '<p class="helper">아직 집계된 데이터가 없어요.</p>'}
+        </div>
+        <div class="card" style="padding:10px 8px;">
+          <p class="section-title" style="margin:0 0 4px 4px;">요일별 평균 방문 (최근 기록 기준, 비로그인 포함)</p>
+          ${svgBars(dow, DN, { unit: '회', maxLabels: 7, color: '#2F9E8F', h: 110 })}
+        </div>
+        <div class="card">
+          <p class="section-title" style="margin:0 0 4px;">기기별</p>
+          ${hBars([{label:'📱 모바일', v:dv[0]},{label:'💻 PC', v:dv[1]}])}
+          <p class="section-title" style="margin:14px 0 4px;">접속 방식</p>
+          ${hBars([{label:'앱처럼 설치해서 접속', v:vv[0]},{label:'브라우저로 접속', v:vv[1]}], 0, '#E8B04B')}
+        </div>
+        <div class="card">
+          <p class="section-title" style="margin:0 0 4px;">유입 경로</p>
+          ${hBars([{label:'직접 접속 (주소·즐겨찾기·설치앱)', v:sv[3]},{label:'카카오톡', v:sv[0]},{label:'네이버', v:sv[1]},{label:'구글', v:sv[2]},{label:'기타 사이트', v:sv[4]}], 0, '#2F9E8F')}
+          <p class="helper" style="margin-top:8px;">카카오톡 단체방에 링크를 올리면 '카카오톡'으로 집계돼요.</p>
+        </div>
+      `;
+    } else if(tab === 'members'){
+      const totals = await statsTotals();
+      const today = ymd(new Date());
+      const ms = state.members;
+      const dates = []; for(let i = 29; i >= 0; i--) dates.push(shiftDate(today, -i));
+      const signups = dates.map(d => ms.filter(m => (m.joinedAt || '').slice(0,10) === d).length);
+      const lab = d => `${Number(d.slice(5,7))}/${Number(d.slice(8))}`;
+      const visited = new Set(totals.map(t => t.memberId));
+      const repeat = totals.filter(t => (t.count || 0) >= 2).length;
+      const d30 = shiftDate(today, -30);
+      const active30 = totals.filter(t => (t.lastDate || '') >= d30).length;
+      const dormant = ms.filter(m => !visited.has(m.id) || !totals.find(t => t.memberId === m.id && (t.lastDate || '') >= d30)).length;
+      const byB = {};
+      ms.forEach(m => { const b = displayBatch(m.batch) || '미입력'; (byB[b] = byB[b] || { n: 0, v: 0 }); byB[b].n++; if(visited.has(m.id)) byB[b].v++; });
+      const bRows = Object.keys(byB).sort((a,b) => byB[b].n - byB[a].n || (parseInt(a,10)||0) - (parseInt(b,10)||0)).slice(0, 25);
+      const pct = (a, b) => b ? Math.round(a / b * 100) : 0;
+      if(!body()) return;
+      body().innerHTML = `
+        <div class="card" style="display:grid; grid-template-columns:repeat(4,1fr); gap:6px; text-align:center; padding:12px 8px;">
+          ${statBig(ms.length, '전체 회원', '')}
+          ${statBig(signups.reduce((a,b)=>a+b,0), '30일 신규', '')}
+          ${statBig(pct(visited.size, ms.length) + '%', '방문 경험', `<span class="req-sub">${visited.size}명</span>`)}
+          ${statBig(pct(repeat, visited.size) + '%', '재방문율', `<span class="req-sub">${repeat}명</span>`)}
+        </div>
+        <p class="helper" style="margin:0 0 6px;">최근 30일 안에 방문한 회원 ${active30}명 · 30일 이상 방문 기록이 없는 회원 ${dormant}명 (방문 기록은 집계 시작 이후 기준)</p>
+        <div class="card" style="padding:10px 8px;">
+          <p class="section-title" style="margin:0 0 4px 4px;">신규 가입 추이 (30일)</p>
+          ${svgBars(signups, dates.map(lab), { unit: '명', color: '#7C5CD6', h: 110 })}
+        </div>
+        <div class="card">
+          <p class="section-title" style="margin:0 0 4px;">기수별 회원 · 방문 경험 (상위 25개)</p>
+          ${bRows.map(b => `<div style="margin:7px 0;"><div style="display:flex; justify-content:space-between; font-size:12.5px;"><span>${b === '미입력' ? '기수 미입력' : esc(b) + '회'}</span><span class="req-sub">회원 ${byB[b].n}명 · 방문 ${byB[b].v}명 (${pct(byB[b].v, byB[b].n)}%)</span></div><div style="height:8px; background:#EEF2F8; border-radius:4px; overflow:hidden; position:relative;"><div style="position:absolute; inset:0 auto 0 0; width:${Math.round(byB[b].n / byB[bRows[0]].n * 100)}%; background:#D6E2FA;"></div><div style="position:absolute; inset:0 auto 0 0; width:${Math.round(byB[b].v / byB[bRows[0]].n * 100)}%; background:#2F6FED;"></div></div></div>`).join('')}
+          <p class="helper" style="margin-top:8px;">연한 막대는 기수 전체 회원, 진한 막대는 방문한 적 있는 회원이에요.</p>
+        </div>
       `;
     } else if(tab === 'views'){
       const snap = await db.collection('viewCounts').orderBy('count', 'desc').limit(50).get();
