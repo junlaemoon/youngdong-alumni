@@ -320,6 +320,7 @@ main#app{padding:16px 16px 4px;}
   .clamp2{max-height:none;}
   .clamp2:not(.open){max-height:2.9em;}
 }
+.ewho-link{color:#1D4ED8; text-decoration:underline; cursor:pointer;}
 .entry-table th{position:relative;}
 .col-rs{position:absolute; top:0; right:-5px; width:12px; height:100%; cursor:col-resize; touch-action:none; z-index:2;}
 .col-rs::after{content:''; position:absolute; left:5px; top:18%; height:64%; width:2px; background:#9CA3AF; border-radius:1px;}
@@ -2494,8 +2495,13 @@ function toggleEntryMore(a){
   a.textContent = open ? '더보기' : '접기';
 }
 function entryWho(e){
-  const nm = currentMember() ? e.name : maskName(e.name);
-  return (e.batch ? `<span style="white-space:nowrap;">${esc(e.batch)}회</span> ` : '') + `<span style="white-space:nowrap;">${esc(nm)}</span>`;
+  const me = currentMember();
+  const nm = me ? e.name : maskName(e.name);
+  const mem = me ? entryMember(e) : null;
+  const nameHtml = mem
+    ? `<a class="ewho-link" onclick="openMemberProfileModal('${mem.id}')" title="누르면 쪽지·연락처 요청">${esc(nm)}</a>`
+    : esc(nm);
+  return (e.batch ? `<span style="white-space:nowrap;">${esc(e.batch)}회</span> ` : '') + `<span style="white-space:nowrap;">${nameHtml}</span>`;
 }
 // 주요서비스: 2줄까지만 보이고, 넘치면 2째 줄 끝에 '더보기'
 function entryClamp(text){
@@ -2573,15 +2579,35 @@ function entryCatValue(){ const sel = document.getElementById('enCatSel'); if(!s
 function setEntryFilter(nid, g, c){ entryFilter[nid + '|' + g] = c; renderEntryBoxes(nid); }
 function normName(x){ return String(x || '').replace(/\s+/g, ''); }
 // 관리자가 대신 올린 글도, 로그인한 회원의 이름(+기수)과 일치하면 본인이 수정할 수 있게 인식
+// 항목의 이름칸에서 이름·기수·직함을 분리: 예) '문준래 "이사"', '32 문준래 이사', '문준래(이사)'
+function entryParseWho(e){
+  let t = String(e.name || '').replace(/["'“”‘’()\[\]{}·,]/g, ' ').trim();
+  let batch = e.batch ? Number(batchNumber(e.batch)) || '' : '';
+  const m1 = t.match(/^(\d{1,3})\s*회?\s+(.*)$/);
+  if(m1){ if(!batch) batch = Number(m1[1]); t = m1[2].trim(); }
+  const tok = t.split(/\s+/).filter(Boolean);
+  return { batch, first: tok[0] || '', whole: normName(t) };
+}
+// 이 항목이 어느 회원 것인지 찾기 (직함이 이름 옆에 붙어 있어도 기수+이름으로 인식). 확실히 한 명일 때만 반환
+function entryMatchMembers(e){
+  if(!e) return [];
+  if(e.memberId && !e.byAdmin){ const m = state.members.find(x => x.id === e.memberId); return m ? [m] : []; }
+  const w = entryParseWho(e);
+  if(!w.first) return [];
+  const byName = state.members.filter(m => { const n = normName(m.name); return n && (n === w.first || n === w.whole); });
+  if(!byName.length) return [];
+  if(w.batch){
+    const withB = byName.filter(m => m.batch && Number(batchNumber(m.batch)) === Number(w.batch));
+    if(withB.length) return withB;
+    return byName.filter(m => !m.batch).length === byName.length && byName.length === 1 ? byName : [];
+  }
+  return byName.length === 1 ? byName : [];
+}
+function entryMember(e){ const ms = entryMatchMembers(e); return ms.length === 1 ? ms[0] : null; }
+// 관리자가 대신 올린 글도 로그인한 회원의 이름+기수와 일치하면 본인이 수정할 수 있게 인식 (직함은 무시)
 function entryOwnerByName(e, me){
   if(!e || !me || !e.byAdmin || !e.name) return false;
-  if(normName(e.name) !== normName(me.name)) return false;
-  const mb = me.batch ? batchNumber(me.batch) : '';
-  if(e.batch && mb && Number(e.batch) !== Number(mb)) return false;
-  if(!e.batch || !mb){ // 기수가 한쪽이라도 비어 있으면 동명이인이 없을 때만 인정
-    if(state.members.filter(m => normName(m.name) === normName(e.name)).length !== 1) return false;
-  }
-  return true;
+  return entryMatchMembers(e).some(m => m.id === me.id) && entryMatchMembers(e).length === 1;
 }
 const ENTRY_GROUP_INFO = {
   '생활·자영업': { icon:'🍽', desc:'식당·카페·휴대폰·금은방 등 일상에서 만나는 동문 가게예요. 모임 장소, 선물, 단골집을 찾을 때 이용하세요.' },
