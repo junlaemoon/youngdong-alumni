@@ -297,7 +297,7 @@ main#app{padding:16px 16px 4px;}
 /* 업체 명단 표: 칸은 줄이고 주요서비스 칸을 넓게 */
 .entry-table{table-layout:fixed; width:100%; min-width:560px;}
 .entry-table td,.entry-table th{word-break:keep-all; overflow-wrap:anywhere; font-size:12.5px; padding:6px 6px; line-height:1.45;}
-.clamp2{position:relative; line-height:1.45; max-height:2.9em; overflow:hidden;}
+.clamp2{position:relative; line-height:1.45; max-height:calc(1.45em * var(--cl, 2)); overflow:hidden;}
 .clamp2.open{max-height:none;}
 .clamp2 .clamp-more{position:absolute; right:0; bottom:0; padding-left:22px; background:linear-gradient(90deg, rgba(255,255,255,0), #fff 45%); color:#6B7280; cursor:pointer; font-size:11.5px; white-space:nowrap;}
 .clamp2.open .clamp-more{position:static; padding-left:6px; background:none;}
@@ -317,14 +317,13 @@ main#app{padding:16px 16px 4px;}
   .rt-content .entry-table td.ec-acts{grid-area:acts; align-self:start;}
   .rt-content .entry-table td:empty{display:none;}
   .entry-acts .btn{padding:5px 9px; font-size:12px;}
-  .clamp2{max-height:none;}
-  .clamp2:not(.open){max-height:2.9em;}
 }
 .ewho-link{color:#1D4ED8; text-decoration:underline; cursor:pointer;}
 .entry-table th{position:relative;}
 .col-rs{position:absolute; top:0; right:-5px; width:12px; height:100%; cursor:col-resize; touch-action:none; z-index:2;}
 .col-rs::after{content:''; position:absolute; left:5px; top:18%; height:64%; width:2px; background:#9CA3AF; border-radius:1px;}
 .col-rs:hover::after{background:#2563EB;}
+.line-ctl{font-size:12px; color:#4B5563; margin:2px 0 4px; display:flex; flex-wrap:wrap; gap:10px; align-items:center;}
 .col-hint{font-size:11.5px; color:#6B7280; margin:2px 0 4px;}
 .col-hint a{color:#1D4ED8; cursor:pointer; text-decoration:underline;}
 .entry-acts{display:flex; flex-direction:row; flex-wrap:nowrap; gap:3px; align-items:center; justify-content:flex-end;}
@@ -633,6 +632,8 @@ async function init(){
     db.collection('meta').doc('entryCols').onSnapshot(d => {
       const c = d.exists ? d.data().cols : null;
       state.entryCols = (Array.isArray(c) && c.length === 5 && c.every(x => typeof x === 'number' && x > 0)) ? c : null;
+      const ln = d.exists ? d.data().lines : null;
+      state.entryLines = (ln && typeof ln === 'object') ? ln : null;
       if(state.loaded && !entryColDragging){ document.querySelectorAll('.entries-box[data-nid]').forEach(b => renderEntryBoxes(b.getAttribute('data-nid'))); }
     }, () => {});
   }catch(e){}
@@ -2481,7 +2482,7 @@ function entryAddrCell(e){
   }
   const href = safeMapUrl(e.mapUrl) || ('https://map.naver.com/p/search/' + encodeURIComponent(e.address || ''));
   // 주소 전체를 링크로 보여주되 2줄까지만 (넘치면 더보기)
-  return `<div class="clamp2"><a href="${esc(href)}" target="_blank" rel="noopener noreferrer" style="color:#1D4ED8; text-decoration:underline;">${esc(e.address)}</a><a class="clamp-more" style="display:none;" onclick="toggleClamp(this)">더보기</a></div>`;
+  return `<div class="clamp2" style="--cl:${entryLinesOf('addr')}"><a href="${esc(href)}" target="_blank" rel="noopener noreferrer" style="color:#1D4ED8; text-decoration:underline;">${esc(e.address)}</a><a class="clamp-more" style="display:none;" onclick="toggleClamp(this)">더보기</a></div>`;
 }
 function entryClip(text, href){
   const t = String(text||'');
@@ -2507,7 +2508,7 @@ function entryWho(e){
 function entryClamp(text){
   const t = String(text || '').trim();
   if(!t) return '';
-  return `<div class="clamp2"><span>${esc(t)}</span><a class="clamp-more" style="display:none;" onclick="toggleClamp(this)">더보기</a></div>`;
+  return `<div class="clamp2" style="--cl:${entryLinesOf('svc')}"><span>${esc(t)}</span><a class="clamp-more" style="display:none;" onclick="toggleClamp(this)">더보기</a></div>`;
 }
 function toggleClamp(a){ const p = a.parentElement; p.classList.toggle('open'); a.textContent = p.classList.contains('open') ? '접기' : '더보기'; }
 function fixClamps(){
@@ -2616,6 +2617,13 @@ const ENTRY_GROUP_INFO = {
   '미분류': { icon:'📂', desc:'분야를 확인 중인 업체예요. 관리자가 곧 정리해요.' },
 };
 const ENTRY_COLS_DEFAULT = [9, 16, 40, 13, 22];
+function entryLinesOf(kind){ const n = Number((state.entryLines || {})[kind]); return (n >= 1 && n <= 6) ? n : 2; }
+function setEntryLines(kind, n){
+  n = Math.max(1, Math.min(6, Number(n) || 2));
+  state.entryLines = Object.assign({}, state.entryLines || {}, { [kind]: n });
+  db.collection('meta').doc('entryCols').set({ lines: state.entryLines }, { merge: true }).catch(() => showToast('저장 실패, 다시 시도해주세요'));
+  document.querySelectorAll('.entries-box[data-nid]').forEach(b => renderEntryBoxes(b.getAttribute('data-nid')));
+}
 function entryColsNow(){ const c = state.entryCols; return (c && c.length === 5) ? c : ENTRY_COLS_DEFAULT; }
 let entryColDragging = false;
 function entryTableHtml(list, nid, g, canAct){
@@ -2625,7 +2633,8 @@ function entryTableHtml(list, nid, g, canAct){
   const adm = isAdmin();
   const heads = ['업종','상호명','주요서비스','기수·성함','주소 (클릭시 지도링크)'];
   const th = heads.map((h, i) => `<th>${h}${adm && i < 4 ? `<span class="col-rs" data-i="${i}" onpointerdown="entryColDrag(event)" title="드래그해서 칸 너비 조정"></span>` : ''}</th>`).join('');
-  return (adm ? `<div class="col-hint">↔ 제목줄의 칸 경계를 좌우로 끌어서 칸 너비를 조정하세요 (모든 회원 화면에 적용) · <a onclick="resetEntryCols()">처음 크기로</a></div>` : '') + `<div class="rt-wrap"><div class="rt-content"><table class="entry-table">
+  const lsel = (kind, label) => `<label style="white-space:nowrap;">${label} <select onchange="setEntryLines('${kind}', this.value)" style="width:auto; padding:1px 4px; font-size:12px;">${[1,2,3,4,5,6].map(n => `<option value="${n}" ${entryLinesOf(kind) === n ? 'selected' : ''}>${n}줄</option>`).join('')}</select></label>`;
+  return (adm ? `<div class="line-ctl">보이는 줄 수 (넘치면 더보기) · ${lsel('svc','주요서비스')} ${lsel('addr','주소')}</div>` : '') + (adm ? `<div class="col-hint">↔ 제목줄의 칸 경계를 좌우로 끌어서 칸 너비를 조정하세요 (모든 회원 화면에 적용) · <a onclick="resetEntryCols()">처음 크기로</a></div>` : '') + `<div class="rt-wrap"><div class="rt-content"><table class="entry-table">
       <colgroup>${w.map(x => `<col style="width:${x}">`).join('')}${hasActs ? '<col style="width:11%">' : ''}</colgroup>
       <thead><tr>${th}${hasActs ? '<th></th>' : ''}</tr></thead>
       <tbody>${list.map(e => `<tr><td class="ec-cat">${esc((e.category||'').trim() || '미분류')}</td><td class="ec-co">${esc(e.company)}</td><td class="ec-svc">${entryClamp(e.service)}</td><td class="ec-who">${entryWho(e)}</td><td class="ec-addr">${entryAddrCell(e)}</td>${hasActs ? `<td class="ec-acts">${canAct(e) ? `<div class="entry-acts"><button class="btn btn-ghost" onclick="openEntryEditModal('${e.id}','${nid}')">수정</button><button class="btn btn-ghost" onclick="deleteEntry('${e.id}','${nid}')">삭제</button></div>` : ''}</td>` : ''}</tr>`).join('')}</tbody>
@@ -2660,14 +2669,14 @@ function entryColDrag(ev){
     entryColDragging = false;
     const out = cur.map(x => Math.round(x * 10) / 10);
     state.entryCols = out;
-    db.collection('meta').doc('entryCols').set({ cols: out }).catch(() => showToast('저장 실패, 다시 시도해주세요'));
+    db.collection('meta').doc('entryCols').set({ cols: out }, { merge: true }).catch(() => showToast('저장 실패, 다시 시도해주세요'));
     setTimeout(fixClamps, 0);
   };
   h.addEventListener('pointermove', move); h.addEventListener('pointerup', up); h.addEventListener('pointercancel', up);
 }
 function resetEntryCols(){
   if(!confirm('칸 너비를 처음 크기로 되돌릴까요?')) return;
-  state.entryCols = null;
+  state.entryCols = null; state.entryLines = null;
   db.collection('meta').doc('entryCols').delete().catch(()=>{});
   document.querySelectorAll('.entries-box[data-nid]').forEach(b => renderEntryBoxes(b.getAttribute('data-nid')));
 }
