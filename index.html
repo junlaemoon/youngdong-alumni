@@ -344,6 +344,7 @@ main#app{padding:16px 16px 4px;}
   </div>
 
   <div class="session-row">
+    <div id="msgBell"></div>
     <div id="adminBell"></div>
     <div id="memberBell"></div>
     <div class="session-chip" id="sessionChip" onclick="onSessionChipClick()"></div>
@@ -403,6 +404,7 @@ let state = {
   noticeSearch: '',
   feedSearch: '',
   memberSearch: '',
+  memberBatch: '',
   activityLog: [],
   reports: [],
   lastBackupAt: null,
@@ -1957,6 +1959,7 @@ function openMemberProfileModal(memberId){
   `+`
     ${adminDetail}
     ${editOthersBtn}
+    ${me.id !== memberId ? `<button class="btn btn-accent btn-block" style="margin-bottom:8px;" onclick="closeModal(); openMsgThread('${memberId}')">✉ 쪽지 보내기</button>` : ''}
     ${contactHtml}
   `, true);
 }
@@ -2067,13 +2070,30 @@ function openDealDetailModal(id){
   const joined = me && (d.participants||[]).some(p => p.memberId === me.id);
   const isOwner = me && d.ownerId === me.id;
   const canSeeContact = joined || isOwner || isAdmin();
+  const myP = me ? (d.participants||[]).find(p => p.memberId === me.id) : null;
+  const myInfo = myP ? `
+    <div class="card" style="background:#F0F7FF; border-color:#BFDBFE;">
+      <p class="section-title" style="margin:0 0 6px;">내 신청 정보</p>
+      ${dealApplyRowsHtml(myP)}
+    </div>` : '';
   const joinBtn = d.status === 'pending' ? '' :
-    joined ? `<button class="btn btn-ghost btn-block" onclick="leaveDeal('${id}')">참여 취소</button>`
+    joined ? `${myInfo}<button class="btn btn-ghost btn-block" onclick="openDealJoinModal('${id}')">내 신청 정보 수정</button><button class="btn btn-ghost btn-block" onclick="leaveDeal('${id}')">참여 취소</button>`
     : st.closed ? `<button class="btn btn-ghost btn-block" disabled>모집이 마감됐어요</button>`
-    : `<button class="btn btn-accent btn-block" onclick="joinDeal('${id}')">참여 신청</button>`;
+    : `<button class="btn btn-accent btn-block" onclick="openDealJoinModal('${id}')">참여 신청</button>`;
+  const sumQty = (d.participants||[]).reduce((t,p) => t + (Number(p.qty)||0), 0);
+  const sumAmt = (d.participants||[]).reduce((t,p) => t + (Number(p.amount)||0), 0);
+  const paidN = (d.participants||[]).filter(p => p.paidConfirmed).length;
   const people = (isOwner || isAdmin()) ? `
     <div class="section-title">참여자 (${st.n})</div>
-    ${(d.participants||[]).map((p,i) => { const m = state.members.find(x=>x.id===p.memberId); return `<div class="req-row"><span class="req-name">${i+1}. ${m ? esc(m.name) : '(탈퇴회원)'}</span><span class="req-sub">${m ? displayBatch(m.batch) : ''}</span></div>`; }).join('') || '<p class="helper">아직 참여자가 없어요</p>'}
+    ${st.n ? `<p class="helper" style="margin:0 0 6px;">총 수량 ${sumQty}개 · 입금액 합계 ${sumAmt.toLocaleString('ko-KR')}원 · 입금확인 ${paidN}/${st.n}명</p>` : ''}
+    ${(d.participants||[]).map((p,i) => { const m = state.members.find(x=>x.id===p.memberId); return `
+      <div class="card" style="padding:10px 12px; margin:6px 0;">
+        <div style="display:flex; justify-content:space-between; align-items:center; gap:8px;">
+          <span class="req-name">${i+1}. ${m ? esc(m.name) : '(탈퇴회원)'}${m && m.batch ? ` <span class="req-sub">${esc(displayBatch(m.batch))}회</span>` : ''}</span>
+          <label style="display:flex; align-items:center; gap:4px; font-size:12px; white-space:nowrap; cursor:pointer;"><input type="checkbox" ${p.paidConfirmed ? 'checked' : ''} onchange="toggleDealPaid('${id}','${p.memberId}', this.checked)"> 입금확인</label>
+        </div>
+        ${dealApplyRowsHtml(p)}
+      </div>`; }).join('') || '<p class="helper">아직 참여자가 없어요</p>'}
     <button class="btn btn-ghost btn-block" onclick="exportDealParticipants('${id}')">⬇ 참여자 명단 엑셀</button>` : '';
   const adminBtns = isAdmin() ? `
     ${d.status === 'pending' ? `<button class="btn btn-accent btn-block" onclick="approveDeal('${id}')">✅ 승인하고 게시</button>` : ''}
@@ -2095,15 +2115,67 @@ function openDealDetailModal(id){
   `, true);
   if(d.status !== 'pending') startCommentsListener('deal', id);
 }
-function joinDeal(id){
+function dealApplyRowsHtml(p){
+  const row = (k, v) => v ? `<div class="req-row" style="padding:3px 0;"><span class="req-sub" style="white-space:nowrap;">${k}</span><span class="req-name" style="font-weight:600; text-align:right; word-break:break-all;">${v}</span></div>` : '';
+  return row('구매수량', p.qty ? esc(String(p.qty)) + '개' : '')
+    + row('입금액', p.amount ? Number(p.amount).toLocaleString('ko-KR') + '원' : '')
+    + row('입금', `${p.paid ? '✅ 입금했어요' : '⬜ 미입금'}${p.paidConfirmed ? ' · <b style="color:#15803D;">운영자 확인</b>' : ''}`)
+    + row('받는분', esc(p.receiver || ''))
+    + row('연락처', esc(p.phone || ''))
+    + row('주소', esc(p.address || ''))
+    + (p.request ? `<div style="margin-top:4px; font-size:12.5px; white-space:pre-wrap; color:var(--ink-soft);">요청사항: ${esc(p.request)}</div>` : '');
+}
+function openDealJoinModal(id){
   if(!requireLogin()) return;
   const d = state.deals.find(x => x.id === id); const me = currentMember();
-  if(!d || dealState(d).closed) return;
-  d.participants = d.participants || [];
-  if(d.participants.some(p => p.memberId === me.id)) return;
-  d.participants.push({ memberId: me.id, at: Date.now() });
-  saveDeals(); showToast('참여 신청했어요'); openDealDetailModal(id); renderApp();
+  if(!d || !me) return;
+  const mine = (d.participants||[]).find(p => p.memberId === me.id);
+  if(!mine && dealState(d).closed) return;
+  const p = mine || {};
+  openModal(mine ? '참여 신청 정보 수정' : '참여 신청', `
+    <p class="helper" style="margin-top:0;">${esc(d.title)}${d.price ? ' · ' + esc(d.price) : ''}</p>
+    <div style="display:flex; gap:8px;">
+      <div class="field" style="flex:1;"><label>구매수량 *</label><input id="jnQty" type="number" min="1" inputmode="numeric" value="${p.qty || 1}"></div>
+      <div class="field" style="flex:1;"><label>입금액 (원)</label><input id="jnAmount" type="number" min="0" inputmode="numeric" placeholder="예: 39000" value="${p.amount || ''}"></div>
+    </div>
+    <label style="display:flex; align-items:center; gap:8px; font-size:14px; margin:2px 0 12px; cursor:pointer;"><input type="checkbox" id="jnPaid" ${p.paid ? 'checked' : ''}> 입금 완료했어요</label>
+    <div class="field"><label>받는분 *</label><input id="jnReceiver" value="${esc(p.receiver || me.name || '')}"></div>
+    <div class="field"><label>연락처 *</label><input id="jnPhone" inputmode="tel" placeholder="010-0000-0000" value="${esc(p.phone || me.phone || '')}"></div>
+    <div class="field"><label>주소</label><input id="jnAddr" placeholder="배송받을 주소 (직접 수령이면 비워두세요)" value="${esc(p.address || '')}"></div>
+    <div class="field"><label>요청사항</label><textarea id="jnReq" rows="3" placeholder="배송 메모 등">${esc(p.request || '')}</textarea></div>
+    <p class="helper">입력한 정보는 판매하는 동문과 관리자에게만 보여요. 입금은 판매자에게 직접 해주세요.</p>
+    <button class="btn btn-accent btn-block" onclick="saveDealJoin('${id}')">${mine ? '수정 저장' : '참여 신청하기'}</button>
+  `, true);
 }
+function saveDealJoin(id){
+  const d = state.deals.find(x => x.id === id); const me = currentMember();
+  if(!d || !me) return;
+  const v = k => ((document.getElementById(k)||{}).value || '').trim();
+  const qty = Math.floor(Number(v('jnQty')));
+  if(!(qty >= 1)){ showToast('구매수량을 1 이상으로 입력해주세요'); return; }
+  if(!v('jnReceiver')){ showToast('받는분 이름을 입력해주세요'); return; }
+  if(!v('jnPhone')){ showToast('연락처를 입력해주세요'); return; }
+  d.participants = d.participants || [];
+  let p = d.participants.find(x => x.memberId === me.id);
+  if(!p){
+    if(dealState(d).closed){ showToast('모집이 마감됐어요'); return; }
+    p = { memberId: me.id, at: Date.now() }; d.participants.push(p);
+  }
+  p.qty = qty;
+  p.amount = Math.max(0, Number(v('jnAmount')) || 0);
+  p.paid = !!(document.getElementById('jnPaid') || {}).checked;
+  p.receiver = v('jnReceiver'); p.phone = v('jnPhone'); p.address = v('jnAddr'); p.request = v('jnReq');
+  p.updatedAt = Date.now();
+  saveDeals(); showToast('신청 정보를 저장했어요'); closeModal(); openDealDetailModal(id); renderApp();
+}
+function toggleDealPaid(id, memberId, on){
+  const d = state.deals.find(x => x.id === id); const me = currentMember();
+  if(!d || !me || !(isAdmin() || d.ownerId === me.id)) return;
+  const p = (d.participants||[]).find(x => x.memberId === memberId); if(!p) return;
+  p.paidConfirmed = !!on; saveDeals();
+  showToast(on ? '입금 확인했어요' : '입금 확인을 해제했어요');
+}
+function joinDeal(id){ openDealJoinModal(id); }
 function leaveDeal(id){
   const d = state.deals.find(x => x.id === id); const me = currentMember(); if(!d || !me) return;
   d.participants = (d.participants||[]).filter(p => p.memberId !== me.id);
@@ -2132,7 +2204,7 @@ function exportDealParticipants(id){
   if(!(d.participants||[]).length){ showToast('아직 참여자가 없어요'); return; }
   const rows = d.participants.map((p,i) => {
     const m = state.members.find(x => x.id === p.memberId);
-    return { '상품': d.title, '업체': d.company, 'No.': i+1, '기수': m ? batchNumber(m.batch) : '', '이름': m ? m.name : '(탈퇴회원)', '직함': m ? (m.title||'') : '', '연락처': m ? maskPhone(m.phone) : '', '신청일시': new Date(p.at).toLocaleString('ko-KR') };
+    return { '상품': d.title, '업체': d.company, 'No.': i+1, '기수': m ? batchNumber(m.batch) : '', '이름': m ? m.name : '(탈퇴회원)', '구매수량': p.qty || '', '입금액': p.amount || '', '입금(참여자 체크)': p.paid ? 'O' : '', '입금확인(운영자)': p.paidConfirmed ? 'O' : '', '받는분': p.receiver || '', '연락처': p.phone || '', '주소': p.address || '', '요청사항': p.request || '', '신청일시': new Date(p.at).toLocaleString('ko-KR') };
   });
   const ws = XLSX.utils.json_to_sheet(rows);
   const wb = XLSX.utils.book_new(); XLSX.utils.book_append_sheet(wb, ws, '참여자명단');
@@ -2842,6 +2914,7 @@ function renderSessionChip(){
   }
   renderAdminBell();
   renderMemberBell();
+  renderMsgBell();
 }
 function getAdminLastSeen(){
   const v = localStorage.getItem('rc_admin_lastSeen');
@@ -3340,18 +3413,6 @@ function renderScheduleTab(){
   `;
 }
 
-function setCreator(id){
-  if(!isAdmin()) return;
-  const target = state.members.find(x => x.id === id);
-  if(!target) return;
-  const makeOn = !target.isCreator;
-  state.members.forEach(m => { if(m.isCreator) m.isCreator = false; }); // 제작자는 한 명만
-  if(makeOn) target.isCreator = true;
-  saveMembers();
-  logActivity('제작자 표시', `${target.name} · ${makeOn ? '지정' : '해제'}`);
-  showToast(makeOn ? `${target.name}님을 플랫폼 제작자로 표시했어요` : '제작자 표시를 해제했어요');
-  renderAll();
-}
 function openIntroModal(kind){
   if(!isAdmin()) return;
   openModal(INTRO_LABELS[kind] + ' 안내 문구', `
@@ -3420,7 +3481,10 @@ function renderMemberList(){
   const me = currentMember();
   const q = (state.memberSearch||'').trim().toLowerCase();
   let list = [...state.members].sort((a,b)=> a.role===b.role ? a.name.localeCompare(b.name) : (a.role==='admin'?-1:1));
-  if(q) list = list.filter(m => m.name.toLowerCase().includes(q) || (m.batch||'').toLowerCase().includes(q) || (m.title||'').toLowerCase().includes(q));
+  const bf = state.memberBatch || '';
+  if(bf) list = list.filter(m => displayBatch(m.batch) === bf);
+  if(q) list = list.filter(m => m.name.toLowerCase().includes(q) || (m.batch||'').toLowerCase().includes(q) || (m.title||'').toLowerCase().includes(q) || (m.intro||'').toLowerCase().includes(q));
+  const countLine = (q || bf) && me ? `<p class="helper" style="padding:8px 0 4px; margin:0;">검색 결과 ${list.length}명</p>` : '';
   if(list.length === 0) return `<p class="helper" style="padding:12px 0;">검색 결과가 없어요</p>`;
   if(!me){
     return `
@@ -3434,17 +3498,17 @@ function renderMemberList(){
       `).join('')}
     `;
   }
-  return list.map(m => `
+  return countLine + list.map(m => `
         <div class="member-row">
           <span style="cursor:pointer;" onclick="openMemberProfileModal('${m.id}')">
             <span class="member-name">${m.name}${m.batch ? ` · ${displayBatch(m.batch)}` : ''}${m.title ? `<span class="role-badge" style="background:var(--river);">${m.title}</span>` : ''}${m.role==='admin' ? '<span class="role-badge">플랫폼관리자</span>' : ''}${m.isCreator ? '<span class="role-badge" style="background:#B8860B;">🛠 플랫폼 제작자</span>' : ''}</span>
             ${m.intro ? `<div class="req-sub" style="margin-top:2px;">${m.intro}</div>` : ''}
           </span>
           <span class="member-actions">
+            ${me.id !== m.id ? `<button class="btn btn-accent btn-sm" onclick="openMsgThread('${m.id}')">✉ 쪽지</button>` : ''}
             ${admin && me.id === m.id ? `
               <button class="btn btn-ghost btn-sm" onclick="openTitleModal('${m.id}')">내 직함 설정</button>
             ` : ''}
-            ${admin ? `<button class="btn btn-ghost btn-sm" onclick="setCreator('${m.id}')">${m.isCreator ? '제작자 표시 해제' : '제작자로 표시'}</button>` : ''}
             ${admin && me.id !== m.id ? `
               <button class="btn btn-ghost btn-sm" onclick="toggleRole('${m.id}')">${m.role==='admin'?'플랫폼관리자 해제':'플랫폼관리자 지정'}</button>
               <button class="btn btn-ghost btn-sm" onclick="openTitleModal('${m.id}')">직함 설정</button>
@@ -3464,6 +3528,157 @@ function renderMemberList(){
           </span>
         </div>
       `).join('');
+}
+
+/* ---------------------------------------------------------
+   쪽지 (1:1 글 쪽지, 컬렉션 messages)
+--------------------------------------------------------- */
+const MSG_MAX = 500;
+let msgUnsubs = [], msgOwner = null, msgIn = [], msgOut = [], msgInitDone = false, msgThread = null;
+function stopMessageListeners(){ msgUnsubs.forEach(u => { try{ u(); }catch(e){} }); msgUnsubs = []; msgOwner = null; msgIn = []; msgOut = []; msgInitDone = false; }
+function startMessageListeners(){
+  const me = currentMember();
+  if(!me){ if(msgOwner) stopMessageListeners(); return; }
+  if(msgOwner === me.id) return;
+  stopMessageListeners(); msgOwner = me.id;
+  const mk = kind => snap => {
+    if(kind === 'in'){
+      if(msgInitDone){
+        snap.docChanges().forEach(c => {
+          if(c.type !== 'added') return;
+          const m = c.doc.data();
+          if(document.getElementById('msgThreadBody') && msgThread === m.fromId) return;
+          showToast('✉ 새 쪽지: ' + memberDisplayName(m.fromId));
+        });
+      }
+      msgIn = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+      msgInitDone = true;
+    } else {
+      msgOut = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+    }
+    renderMsgBell(); refreshMsgUi();
+  };
+  try{
+    msgUnsubs.push(db.collection('messages').where('toId', '==', me.id).onSnapshot(mk('in'), e => console.error('[msg in]', e)));
+    msgUnsubs.push(db.collection('messages').where('fromId', '==', me.id).onSnapshot(mk('out'), e => console.error('[msg out]', e)));
+  }catch(e){ console.error(e); }
+}
+function msgUnreadCount(){ return msgIn.filter(m => !m.readAt).length; }
+function renderMsgBell(){
+  const el = document.getElementById('msgBell');
+  if(!el) return;
+  const me = currentMember();
+  if(!me){ el.innerHTML = ''; return; }
+  startMessageListeners();
+  const n = msgUnreadCount();
+  el.innerHTML = `<div class="admin-bell" title="쪽지함" onclick="openMsgInbox()">✉${n > 0 ? `<span class="badge-count">${n > 99 ? '99+' : n}</span>` : ''}</div>`;
+}
+function msgConvos(){
+  const me = currentMember(); if(!me) return [];
+  const map = {};
+  [...msgIn, ...msgOut].forEach(m => { const o = m.fromId === me.id ? m.toId : m.fromId; (map[o] = map[o] || []).push(m); });
+  return Object.keys(map).map(id => {
+    const arr = map[id].sort((a,b) => (a.createdAt||0) - (b.createdAt||0));
+    return { id, arr, last: arr[arr.length - 1], unread: arr.filter(m => m.toId === me.id && !m.readAt).length };
+  }).sort((a,b) => (b.last.createdAt||0) - (a.last.createdAt||0));
+}
+function msgText(t){ return esc(t).replace(/\n/g, '<br>'); }
+function msgInboxHtml(){
+  const list = msgConvos();
+  if(!list.length) return `<div class="empty">아직 주고받은 쪽지가 없어요.<br>회원 탭에서 동문을 찾아 ✉ 쪽지를 보내보세요.</div>`;
+  return list.map(c => `
+    <div class="req-row" style="cursor:pointer; align-items:flex-start; gap:8px;" onclick="closeModal(); openMsgThread('${c.id}')">
+      <span style="min-width:0; flex:1;">
+        <span class="req-name">${esc(memberDisplayName(c.id, '(탈퇴한 회원)'))}${c.unread ? ` <span class="role-badge" style="background:var(--coral);">${c.unread}</span>` : ''}</span>
+        <div class="req-sub" style="white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">${c.last.fromId === c.id ? '' : '나: '}${esc(String(c.last.text || '').replace(/\s+/g, ' '))}</div>
+      </span>
+      <span class="req-sub" style="white-space:nowrap;">${fmtTimeAgo(c.last.createdAt)}</span>
+    </div>`).join('');
+}
+function openMsgInbox(){
+  if(!currentMember()){ openAuthModal(); return; }
+  msgThread = null;
+  openModal('✉ 쪽지함', `<div id="msgInboxBody">${msgInboxHtml()}</div>`, true);
+}
+function msgThreadHtml(otherId){
+  const me = currentMember();
+  const arr = [...msgIn, ...msgOut].filter(m => m.fromId === otherId || m.toId === otherId).sort((a,b) => (a.createdAt||0) - (b.createdAt||0));
+  if(!arr.length) return `<div class="empty" style="padding:24px 0;">첫 쪽지를 보내보세요.</div>`;
+  let lastDay = '';
+  return arr.map(m => {
+    const mine = m.fromId === me.id;
+    const d = new Date(m.createdAt || Date.now());
+    const day = `${d.getFullYear()}.${d.getMonth()+1}.${d.getDate()}`;
+    const hm = `${String(d.getHours()).padStart(2,'0')}:${String(d.getMinutes()).padStart(2,'0')}`;
+    const sep = day !== lastDay ? `<div class="req-sub" style="text-align:center; margin:10px 0 4px;">${day}</div>` : ''; lastDay = day;
+    return sep + `<div style="display:flex; flex-direction:column; align-items:${mine ? 'flex-end' : 'flex-start'}; margin:4px 0;">
+      <div style="max-width:82%; padding:8px 11px; border-radius:14px; font-size:13.5px; line-height:1.5; word-break:break-word; ${mine ? 'background:var(--river); color:#fff; border-bottom-right-radius:4px;' : 'background:#F1F3F7; color:var(--ink); border-bottom-left-radius:4px;'}">${msgText(m.text)}</div>
+      <div class="req-sub" style="font-size:10.5px; margin-top:1px;">${hm}${mine ? (m.readAt ? ' · 읽음' : ' · 전송됨') + ` · <a style="cursor:pointer; color:#9CA3AF;" onclick="deleteMsg('${m.id}')">삭제</a>` : ''}</div>
+    </div>`;
+  }).join('');
+}
+function openMsgThread(otherId){
+  const me = currentMember();
+  if(!me){ openAuthModal(); return; }
+  const o = state.members.find(m => m.id === otherId);
+  if(!o || o.id === me.id) return;
+  msgThread = otherId;
+  openModal('✉ ' + memberDisplayName(otherId), `
+    <div id="msgThreadBody" style="max-height:50vh; overflow-y:auto; padding:2px 2px 8px;">${msgThreadHtml(otherId)}</div>
+    <div class="field" style="margin-top:8px;"><textarea id="msgInput" rows="3" maxlength="${MSG_MAX}" placeholder="쪽지 내용 (${MSG_MAX}자 이내)" style="width:100%; resize:none;"></textarea></div>
+    <button class="btn btn-accent btn-block" onclick="sendMsg('${otherId}')">보내기</button>
+    <p class="helper" style="margin-top:8px;">쪽지는 이 앱 안에서 상대와 나에게만 보여요. 비밀번호·계좌번호 같은 민감한 정보는 보내지 마세요.</p>
+  `, true);
+  const bd = document.getElementById('msgThreadBody'); if(bd) bd.scrollTop = bd.scrollHeight;
+  markThreadRead(otherId);
+}
+function markThreadRead(otherId){
+  const me = currentMember(); if(!me) return;
+  const un = msgIn.filter(m => m.fromId === otherId && !m.readAt);
+  if(!un.length) return;
+  const now = Date.now();
+  un.forEach(m => { m.readAt = now; });
+  const batch = db.batch();
+  un.forEach(m => batch.update(db.collection('messages').doc(m.id), { readAt: now }));
+  batch.commit().catch(e => console.error('[msg read]', e));
+  renderMsgBell();
+}
+function refreshMsgUi(){
+  const ib = document.getElementById('msgInboxBody'); if(ib) ib.innerHTML = msgInboxHtml();
+  const tb = document.getElementById('msgThreadBody');
+  if(tb && msgThread){
+    const atBottom = tb.scrollHeight - tb.scrollTop - tb.clientHeight < 40;
+    tb.innerHTML = msgThreadHtml(msgThread);
+    if(atBottom) tb.scrollTop = tb.scrollHeight;
+    markThreadRead(msgThread);
+  }
+  if(state.tab === 'members' && !modalIsOpen()){ const a = document.getElementById('memberListArea'); if(a && !document.activeElement.matches('input,select,textarea')) renderApp(); }
+}
+function sendMsg(otherId){
+  const me = currentMember(); if(!me) return;
+  const inp = document.getElementById('msgInput'); if(!inp) return;
+  const text = inp.value.trim();
+  if(!text){ showToast('내용을 입력해주세요'); return; }
+  if(text.length > MSG_MAX){ showToast(`${MSG_MAX}자 이내로 써주세요`); return; }
+  if(!state.members.find(m => m.id === otherId) || otherId === me.id) return;
+  const id = uid();
+  inp.value = '';
+  db.collection('messages').doc(id).set({ id, fromId: me.id, toId: otherId, text, createdAt: Date.now(), readAt: null })
+    .catch(() => { showToast('전송 실패, 다시 시도해주세요'); inp.value = text; });
+}
+function deleteMsg(id){
+  if(!confirm('이 쪽지를 삭제할까요? (상대 화면에서도 사라져요)')) return;
+  db.collection('messages').doc(id).delete().catch(() => showToast('삭제 실패'));
+}
+
+function onMemberBatch(v){
+  state.memberBatch = v;
+  const el = document.getElementById('memberListArea');
+  if(el) el.innerHTML = renderMemberList();
+}
+function memberBatchOptions(){
+  const set = new Set(); state.members.forEach(m => { const b = displayBatch(m.batch); if(b) set.add(b); });
+  return [...set].sort((a,b) => (parseInt(a,10)||0) - (parseInt(b,10)||0) || a.localeCompare(b));
 }
 function onMemberSearch(v){
   state.memberSearch = v;
@@ -3515,7 +3730,11 @@ function renderMembersTab(){
     <button class="btn btn-ghost btn-block" onclick="openActivityLogModal()">🗒 관리자 활동 로그 보기</button>
     <button class="btn btn-ghost btn-block" onclick="openReportsModal()">🚩 신고 내역 보기${state.reports && state.reports.filter(r=>!r.resolved).length ? ` (${state.reports.filter(r=>!r.resolved).length})` : ''}</button>
     ` : ''}
-    <div class="field" style="margin-top:12px;"><input id="memberSearchInput" placeholder="🔍 이름·기수·직함 검색" value="${state.memberSearch||''}" oninput="onMemberSearch(this.value)"></div>
+    ${currentMember() ? `<button class="btn btn-accent btn-block" style="margin-top:12px;" onclick="openMsgInbox()">✉ 쪽지함${msgUnreadCount() ? ` (새 쪽지 ${msgUnreadCount()})` : ''}</button>` : ''}
+    <div class="field" style="margin-top:12px; display:flex; gap:8px;">
+      <input id="memberSearchInput" style="flex:1; min-width:0;" placeholder="🔍 이름·기수·직함·소속 검색" value="${esc(state.memberSearch||'')}" oninput="onMemberSearch(this.value)">
+      <select id="memberBatchSel" style="width:auto; max-width:38%;" onchange="onMemberBatch(this.value)"><option value="">전체 기수</option>${memberBatchOptions().map(b => `<option value="${esc(b)}" ${state.memberBatch === b ? 'selected' : ''}>${esc(b)}회</option>`).join('')}</select>
+    </div>
     <div class="card" style="padding:4px 16px;">
       <div id="memberListArea">${renderMemberList()}</div>
     </div>
