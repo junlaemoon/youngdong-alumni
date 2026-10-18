@@ -2381,13 +2381,16 @@ const RT_ALLOWED = new Set(['B','STRONG','I','EM','U','S','STRIKE','DEL','SPAN',
 const RT_DROP = new Set(['SCRIPT','STYLE','IFRAME','OBJECT','EMBED','LINK','META','NOSCRIPT','TEMPLATE','SVG','MATH','FORM','INPUT','BUTTON','SELECT','TEXTAREA','VIDEO','AUDIO','IMG']);
 const RT_FONT_PX = {1:'11px',2:'12px',3:'14px',4:'16px',5:'19px',6:'23px',7:'28px'};
 function rtCleanStyle(st){
-  const ok = ['color','background-color','font-size','text-align','font-weight','font-style','text-decoration','width','vertical-align'];
+  const ok = ['color','background-color','font-size','text-align','font-weight','font-style','text-decoration','text-decoration-line','width','vertical-align'];
+  const FS_KW = { 'xx-small':'10px', 'x-small':'11px', 'small':'12px', 'medium':'14px', 'large':'19px', 'x-large':'23px', 'xx-large':'28px', 'xxx-large':'34px' };
   const out = [];
   String(st||'').split(';').forEach(rule => {
     const i = rule.indexOf(':'); if(i < 0) return;
-    const k = rule.slice(0,i).trim().toLowerCase(), v = rule.slice(i+1).trim();
+    let k = rule.slice(0,i).trim().toLowerCase(), v = rule.slice(i+1).trim();
     if(!ok.includes(k)) return;
     if(!/^[#\w\s.,()%-]+$/.test(v) || /url|expression|javascript/i.test(v)) return;
+    if(k === 'text-decoration-line'){ k = 'text-decoration'; if(!/^(underline|line-through|none)(\s+(underline|line-through))*$/i.test(v)) return; }
+    if(k === 'font-size' && FS_KW[v.toLowerCase()]) v = FS_KW[v.toLowerCase()];
     if(k === 'font-size' && !/^[\d.]+(px|pt|em|rem|%)$/.test(v)) return;
     if(k === 'width' && !/^[\d.]+(px|%)$/.test(v)) return;
     out.push(k + ':' + v);
