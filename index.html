@@ -916,10 +916,25 @@ function logVisit(){
 }
 
 // 게시물 조회수: 같은 기기에서 같은 글은 하루 1회만 집계, 관리자 본인 조회는 제외
+let pendingReadersFor = null;
 function trackView(type, id){
-  if(isAdmin()) return;
+  const me = currentMember();
+  pendingReadersFor = { type, id, at: Date.now() };
   const key = type + '_' + id;
   const today = ymd(new Date());
+  // 읽은 사람 기록: 로그인한 회원이 이 글을 처음 열 때 한 번만 (기기 기준)
+  if(me){
+    let rd = {};
+    try{ rd = JSON.parse(localStorage.getItem('rc_readers') || '{}'); }catch(e){}
+    const rk = me.id + '|' + key;
+    if(!rd[rk]){
+      rd[rk] = 1;
+      const ks = Object.keys(rd); if(ks.length > 800) ks.slice(0, ks.length - 800).forEach(k => delete rd[k]);
+      try{ localStorage.setItem('rc_readers', JSON.stringify(rd)); }catch(e){}
+      db.collection('viewCounts').doc(key).set({ type, itemId: id, readers: { [me.id]: Date.now() } }, { merge: true }).catch(()=>{});
+    }
+  }
+  if(isAdmin()) return;
   let seen = {};
   try{ seen = JSON.parse(localStorage.getItem('rc_viewed') || '{}'); }catch(e){}
   if(seen[key] === today) return;
@@ -927,6 +942,42 @@ function trackView(type, id){
   seen[key] = today;
   try{ localStorage.setItem('rc_viewed', JSON.stringify(seen)); }catch(e){}
   db.collection('viewCounts').doc(key).set({ type, itemId: id, count: firebase.firestore.FieldValue.increment(1), lastAt: Date.now() }, { merge: true }).catch(()=>{});
+}
+// 관리자용: 글 상세 위쪽에 'N명이 읽었습니다' 표시 → 누르면 읽은/안 읽은 회원 목록
+async function fillReadersBar(type, id){
+  try{
+    const d = await db.collection('viewCounts').doc(type + '_' + id).get();
+    const n = d.exists ? Object.keys((d.data().readers) || {}).length : 0;
+    const el = document.getElementById('readersN'); if(el) el.textContent = n;
+  }catch(e){ const el = document.getElementById('readersN'); if(el) el.textContent = '?'; }
+}
+const READERS_BACK = { notice: 'openNoticeDetailModal', post: 'openPostDetailModal', meetup: 'openMeetupDetailModal', deal: 'openDealDetailModal' };
+async function openReadersModal(type, id, tab){
+  if(!isAdmin()) return;
+  tab = tab || 'read';
+  openModal('읽은 멤버 보기', `<div id="readersBody"><p class="helper">불러오는 중…</p></div>`, true);
+  try{
+    const d = await db.collection('viewCounts').doc(type + '_' + id).get();
+    const rd = d.exists ? ((d.data().readers) || {}) : {};
+    const readIds = Object.keys(rd);
+    const readMembers = readIds.map(mid => ({ m: state.members.find(x => x.id === mid), at: rd[mid] })).sort((a,b) => (b.at||0) - (a.at||0));
+    const unread = state.members.filter(m => !rd[m.id]).sort((a,b) => (Number(batchNumber(a.batch))||999) - (Number(batchNumber(b.batch))||999) || a.name.localeCompare(b.name));
+    const who = m => m ? `${esc(m.name)}${m.batch ? ` <span class="req-sub">${esc(displayBatch(m.batch))}회</span>` : ''}${m.title ? ` <span class="req-sub">· ${esc(m.title)}</span>` : ''}` : '(탈퇴회원)';
+    const tabBtn = (t, label, n) => `<button class="btn ${tab === t ? 'btn-primary' : 'btn-ghost'} btn-sm" style="flex:1;" onclick="openReadersModal('${type}','${id}','${t}')">${label} ${n}</button>`;
+    const el = document.getElementById('readersBody'); if(!el) return;
+    el.innerHTML = `
+      <div style="display:flex; gap:6px; margin-bottom:10px;">${tabBtn('read','읽음',readMembers.length)}${tabBtn('unread','안 읽음',unread.length)}</div>
+      <p class="helper" style="margin-top:0;">이 기능을 켠 이후에 글을 연 회원부터 기록돼요. 이전에 읽은 사람은 '안 읽음'에 나올 수 있어요.</p>
+      <div style="max-height:52vh; overflow-y:auto;">
+        ${tab === 'read'
+          ? (readMembers.length ? readMembers.map(r => `<div class="req-row"><span class="req-name">${who(r.m)}</span><span class="req-sub">${fmtTimeAgo(r.at)}</span></div>`).join('') : '<div class="empty">아직 읽은 회원이 없어요</div>')
+          : (unread.length ? unread.map(m => `<div class="req-row"><span class="req-name">${who(m)}</span></div>`).join('') : '<div class="empty">모든 회원이 읽었어요 🎉</div>')}
+      </div>
+      <button class="btn btn-ghost btn-block" style="margin-top:10px;" onclick="${READERS_BACK[type] || 'closeModal'}('${id}')">← 글로 돌아가기</button>`;
+  }catch(e){
+    console.error(e);
+    const el = document.getElementById('readersBody'); if(el) el.innerHTML = `<p class="helper">읽은 멤버를 불러오지 못했어요.${e && e.code ? ' (' + esc(e.code) + ')' : ''}</p>`;
+  }
 }
 
 const VIEW_TYPE_LABEL = { notice: '공지', post: '소식', meetup: '모임', deal: '동문장터' };
@@ -1151,11 +1202,9 @@ async function openPersonVisitsModal(memberId){
   const m = state.members.find(x => x.id === memberId);
   openModal(`${m ? esc(m.name) : '회원'} 방문기록`, `<div id="personBody"><p class="helper">불러오는 중…</p></div>`, true);
   try{
-    const FP = firebase.firestore.FieldPath.documentId();
-    const snap = await db.collection('visitLog')
-      .where(FP, '>=', memberId + '_').where(FP, '<', memberId + '_\uf8ff')
-      .orderBy(FP, 'desc').limit(120).get();
-    const rows = snap.docs.map(d => d.data());
+    // 문서 ID 범위 조회 대신 memberId 일치 조회(자동 색인) 후 화면에서 날짜순 정렬 — 더 안정적
+    const snap = await db.collection('visitLog').where('memberId', '==', memberId).limit(400).get();
+    const rows = snap.docs.map(d => d.data()).sort((a, b) => String(b.date || '').localeCompare(String(a.date || ''))).slice(0, 120);
     const t = ts => ts ? new Date(ts).toLocaleTimeString('ko-KR', { hour: '2-digit', minute: '2-digit' }) : '-';
     const total = rows.reduce((s, r) => s + (r.count || 0), 0);
     const el = document.getElementById('personBody');
@@ -1168,7 +1217,7 @@ async function openPersonVisitsModal(memberId){
   }catch(e){
     console.error(e);
     const el = document.getElementById('personBody');
-    if(el) el.innerHTML = '<p class="helper">기록을 불러오지 못했어요.</p>';
+    if(el) el.innerHTML = `<p class="helper">기록을 불러오지 못했어요.${e && e.code ? ' (' + esc(e.code) + ')' : ''}<br>${e && e.code === 'permission-denied' ? 'Firestore 규칙이 최신으로 게시됐는지 확인해주세요.' : ''}</p>`;
   }
 }
 
@@ -1822,6 +1871,18 @@ function openModal(title, bodyHtml, closeOnBackdrop){
         ${bodyHtml}
       </div>
     </div>`;
+  if(pendingReadersFor && isAdmin() && Date.now() - pendingReadersFor.at < 2000){
+    const pr = pendingReadersFor; pendingReadersFor = null;
+    const head = document.querySelector('#modal-root .modal-head');
+    if(head && !/읽은 멤버/.test(title)){
+      const bar = document.createElement('div');
+      bar.style.cssText = 'margin:2px 0 12px; padding:9px 12px; background:#F3F6FB; border-radius:10px; font-size:13px; cursor:pointer; display:flex; justify-content:space-between; align-items:center;';
+      bar.innerHTML = '<span>👁 <b id="readersN" style="color:#15803D;">…</b>명이 읽었습니다</span><span style="color:#6B7280;">›</span>';
+      bar.onclick = () => openReadersModal(pr.type, pr.id);
+      head.insertAdjacentElement('afterend', bar);
+      fillReadersBar(pr.type, pr.id);
+    }
+  } else { pendingReadersFor = null; }
   startEntriesListeners();
 }
 function openPolicyModal(){
