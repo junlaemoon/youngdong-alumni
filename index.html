@@ -872,6 +872,14 @@ function esc(s){
   return String(s == null ? '' : s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 }
 
+// 앱 설치(홈 화면 추가 / PC 앱 설치) 순간 기록
+window.addEventListener('appinstalled', () => {
+  try{
+    const me = currentMember(); if(!me) return;
+    const mobile = /Android|iPhone|iPad|iPod|Mobile/i.test(navigator.userAgent || '');
+    db.collection('visitTotals').doc(me.id).set({ memberId: me.id, [mobile ? 'appMobile' : 'appPc']: true, installedAt: Date.now() }, { merge: true }).catch(()=>{});
+  }catch(e){}
+});
 // 방문 기록: 같은 기기·같은 회원은 30분에 최대 1회만 기록 (쓰기 횟수 절약)
 function logVisit(){
   const me = currentMember();
@@ -886,14 +894,16 @@ function logVisit(){
   const dailyRef = db.collection('visitDaily').doc(today);
   // 유입 분석용 부가 집계 (시간대 / 기기 / 접속방식 / 유입경로)
   let extra = {};
+  let devInfo = { dev: 'pc', standalone: false };
   try{
     const ua = navigator.userAgent || '';
     const hh = String(new Date().getHours()).padStart(2, '0');
     const dev = /Android|iPhone|iPad|iPod|Mobile/i.test(ua) ? 'mobile' : 'pc';
     const standalone = (window.matchMedia && window.matchMedia('(display-mode: standalone)').matches) || window.navigator.standalone === true;
     let ref = ''; try{ ref = new URL(document.referrer).hostname; }catch(e){}
-    const src = /KAKAOTALK/i.test(ua) ? 'kakao' : /NAVER\(inapp/i.test(ua) || /naver\./i.test(ref) ? 'naver'
+    const src = /KAKAOTALK/i.test(ua) ? 'kakao' : /BAND\//i.test(ua) || /(^|\.)band\.us$/i.test(ref) ? 'band' : /NAVER\(inapp/i.test(ua) || /naver\./i.test(ref) ? 'naver'
       : /google\./i.test(ref) ? 'google' : (!ref || ref === location.hostname) ? 'direct' : 'other';
+    devInfo = { dev, standalone: !!standalone };
     extra = { hours: { [hh]: inc }, dev: { [dev]: inc }, via: { [standalone ? 'app' : 'web']: inc }, src: { [src]: inc } };
   }catch(e){ extra = {}; }
   if(!me){
@@ -911,29 +921,49 @@ function logVisit(){
       tx.update(dayRef, { count: inc, lastAt: now });
       tx.set(dailyRef, Object.assign({ date: today, visits: inc }, extra), { merge: true });
     }
-    tx.set(totalRef, { memberId: me.id, count: inc, lastAt: now, lastDate: today }, { merge: true });
+    const who = { memberId: me.id, count: inc, lastAt: now, lastDate: today };
+    who[devInfo.dev === 'mobile' ? 'useMobile' : 'usePc'] = true;                                  // 접속해 본 기기
+    if(devInfo.standalone) who[devInfo.dev === 'mobile' ? 'appMobile' : 'appPc'] = true;            // 설치한 앱(홈 화면/PC 앱)으로 접속한 기기
+    tx.set(totalRef, who, { merge: true });
   }).catch(e => console.error('[visit]', e));
 }
 
 // 게시물 조회수: 같은 기기에서 같은 글은 하루 1회만 집계, 관리자 본인 조회는 제외
+// 읽은 사람 기록: 로그인한 회원이 이 글을 처음 볼 때 한 번만 (기기 기준) — 상세창을 열거나 목록에서 전문이 보일 때
+function recordReader(type, id){
+  const me = currentMember(); if(!me) return;
+  const key = type + '_' + id;
+  let rd = {};
+  try{ rd = JSON.parse(localStorage.getItem('rc_readers') || '{}'); }catch(e){}
+  const rk = me.id + '|' + key;
+  if(rd[rk]) return;
+  rd[rk] = 1;
+  const ks = Object.keys(rd); if(ks.length > 800) ks.slice(0, ks.length - 800).forEach(k => delete rd[k]);
+  try{ localStorage.setItem('rc_readers', JSON.stringify(rd)); }catch(e){}
+  db.collection('viewCounts').doc(key).set({ type, itemId: id, readers: { [me.id]: Date.now() } }, { merge: true }).catch(()=>{});
+}
+// 목록에 전문이 펼쳐진 카드용: 관리자에게만 보이는 '👁 N명이 읽었습니다' 줄
+function readersBarInline(type, id){
+  if(!isAdmin()) return '';
+  return `<div class="readers-bar" data-type="${type}" data-id="${id}" onclick="openReadersModal('${type}','${id}')" style="margin:0 0 10px; padding:8px 12px; background:#F3F6FB; border-radius:10px; font-size:13px; cursor:pointer; display:flex; justify-content:space-between; align-items:center;"><span>👁 <b class="readers-n" style="color:#15803D;">…</b>명이 읽었습니다</span><span style="color:#6B7280;">›</span></div>`;
+}
+async function fillReadersBars(){
+  const bars = [...document.querySelectorAll('.readers-bar[data-type]')];
+  for(const el of bars){
+    try{
+      const d = await db.collection('viewCounts').doc(el.getAttribute('data-type') + '_' + el.getAttribute('data-id')).get();
+      const n = d.exists ? Object.keys((d.data().readers) || {}).length : 0;
+      const t = el.querySelector('.readers-n'); if(t) t.textContent = n;
+    }catch(e){ const t = el.querySelector('.readers-n'); if(t) t.textContent = '?'; }
+  }
+}
 let pendingReadersFor = null;
 function trackView(type, id){
   const me = currentMember();
   pendingReadersFor = { type, id, at: Date.now() };
   const key = type + '_' + id;
   const today = ymd(new Date());
-  // 읽은 사람 기록: 로그인한 회원이 이 글을 처음 열 때 한 번만 (기기 기준)
-  if(me){
-    let rd = {};
-    try{ rd = JSON.parse(localStorage.getItem('rc_readers') || '{}'); }catch(e){}
-    const rk = me.id + '|' + key;
-    if(!rd[rk]){
-      rd[rk] = 1;
-      const ks = Object.keys(rd); if(ks.length > 800) ks.slice(0, ks.length - 800).forEach(k => delete rd[k]);
-      try{ localStorage.setItem('rc_readers', JSON.stringify(rd)); }catch(e){}
-      db.collection('viewCounts').doc(key).set({ type, itemId: id, readers: { [me.id]: Date.now() } }, { merge: true }).catch(()=>{});
-    }
-  }
+  recordReader(type, id);
   if(isAdmin()) return;
   let seen = {};
   try{ seen = JSON.parse(localStorage.getItem('rc_viewed') || '{}'); }catch(e){}
@@ -1107,7 +1137,7 @@ async function loadStatsBody(tab){
       const dow = dowSum.map((v, i) => dowCnt[i] ? +(v / dowCnt[i]).toFixed(1) : 0);
       const DN = ['일','월','화','수','목','금','토'];
       const dv = agg('dev', ['mobile','pc']), vv = agg('via', ['app','web']);
-      const sv = agg('src', ['kakao','naver','google','direct','other']);
+      const sv = agg('src', ['kakao','naver','google','direct','other','band']);
       const peak = hv.indexOf(Math.max(...hv));
       if(!body()) return;
       body().innerHTML = `
@@ -1128,8 +1158,8 @@ async function loadStatsBody(tab){
         </div>
         <div class="card">
           <p class="section-title" style="margin:0 0 4px;">유입 경로</p>
-          ${hBars([{label:'직접 접속 (주소·즐겨찾기·설치앱)', v:sv[3]},{label:'카카오톡', v:sv[0]},{label:'네이버', v:sv[1]},{label:'구글', v:sv[2]},{label:'기타 사이트', v:sv[4]}], 0, '#2F9E8F')}
-          <p class="helper" style="margin-top:8px;">카카오톡 단체방에 링크를 올리면 '카카오톡'으로 집계돼요.</p>
+          ${hBars([{label:'직접 접속 (주소·즐겨찾기·설치앱)', v:sv[3]},{label:'카카오톡', v:sv[0]},{label:'네이버 (블로그·카페·검색·앱)', v:sv[1]},{label:'밴드', v:sv[5]},{label:'구글', v:sv[2]},{label:'기타 사이트', v:sv[4]}], 0, '#2F9E8F')}
+          <p class="helper" style="margin-top:8px;">카카오톡 단체방에 링크를 올리면 '카카오톡'으로, 밴드·네이버 블로그/카페 글의 링크로 들어오면 '밴드'·'네이버'로 집계돼요. 앱 안 브라우저나 보안 설정에 따라 출처가 안 넘어오면 '직접 접속'으로 잡힐 수 있어요.</p>
         </div>
       `;
     } else if(tab === 'members'){
@@ -1148,6 +1178,10 @@ async function loadStatsBody(tab){
       ms.forEach(m => { const b = displayBatch(m.batch) || '미입력'; (byB[b] = byB[b] || { n: 0, v: 0 }); byB[b].n++; if(visited.has(m.id)) byB[b].v++; });
       const bRows = Object.keys(byB).sort((a,b) => byB[b].n - byB[a].n || (parseInt(a,10)||0) - (parseInt(b,10)||0)).slice(0, 25);
       const pct = (a, b) => b ? Math.round(a / b * 100) : 0;
+      const memberIds = new Set(ms.map(m => m.id));
+      const tm = totals.filter(t => memberIds.has(t.memberId));
+      const appM = tm.filter(t => t.appMobile).length, appP = tm.filter(t => t.appPc).length, appAny = tm.filter(t => t.appMobile || t.appPc).length;
+      const useM = tm.filter(t => t.useMobile).length, useP = tm.filter(t => t.usePc).length;
       if(!body()) return;
       body().innerHTML = `
         <div class="card" style="display:grid; grid-template-columns:repeat(4,1fr); gap:6px; text-align:center; padding:12px 8px;">
@@ -1155,6 +1189,15 @@ async function loadStatsBody(tab){
           ${statBig(signups.reduce((a,b)=>a+b,0), '30일 신규', '')}
           ${statBig(pct(visited.size, ms.length) + '%', '방문 경험', `<span class="req-sub">${visited.size}명</span>`)}
           ${statBig(pct(repeat, visited.size) + '%', '재방문율', `<span class="req-sub">${repeat}명</span>`)}
+        </div>
+        <div class="card" style="padding:12px 8px;">
+          <p class="section-title" style="margin:0 0 8px 6px;">📲 앱 설치해서 쓰는 회원</p>
+          <div style="display:grid; grid-template-columns:repeat(3,1fr); gap:6px; text-align:center;">
+            ${statBig(appM, '모바일 앱', `<span class="req-sub">${pct(appM, ms.length)}%</span>`)}
+            ${statBig(appP, 'PC 앱', `<span class="req-sub">${pct(appP, ms.length)}%</span>`)}
+            ${statBig(appAny, '둘 중 하나라도', `<span class="req-sub">${pct(appAny, ms.length)}%</span>`)}
+          </div>
+          <p class="helper" style="margin:8px 6px 0;">접속해 본 회원: 모바일 ${useM}명 · PC ${useP}명. 설치한 앱을 한 번이라도 열어 접속한 회원부터 집계돼요. (설치만 하고 열지 않았거나, 이 기능을 켜기 전에 설치하고 아직 안 연 경우는 빠져요. 삭제는 알 수 없어요.)</p>
         </div>
         <p class="helper" style="margin:0 0 6px;">최근 30일 안에 방문한 회원 ${active30}명 · 30일 이상 방문 기록이 없는 회원 ${dormant}명 (방문 기록은 집계 시작 이후 기준)</p>
         <div class="card" style="padding:10px 8px;">
@@ -3060,14 +3103,19 @@ function toggleEntries(id){
   saveNotices(); logActivity('회원 직접 등록 ' + (n.entriesEnabled ? '켜기' : '끄기'), n.title);
   closeModal(); showToast(n.entriesEnabled ? '회원 직접 등록을 켰어요' : '회원 직접 등록을 껐어요 (등록된 내용은 보존돼요)'); renderAll();
 }
+const ENTRY_LIMIT = 2; // 1인당 업체 등록 가능 수 (관리자 제외)
+function myEntryCount(nid){
+  const me = currentMember(); if(!me) return 0;
+  return (entryStore[nid] || []).filter(e => (e.memberId === me.id && !e.byAdmin) || entryOwnerByName(e, me)).length;
+}
 function openEntryModal(nid, group){
   if(!requireLogin()) return;
   window._entryGroup = group && ENTRY_GROUPS.includes(group) ? group : '';
   const me = currentMember();
-  const mine = (entryStore[nid] || []).filter(e => e.memberId === me.id).length;
-  if(!isAdmin() && mine >= 5){ showToast('한 공지에는 최대 5건까지 등록할 수 있어요'); return; }
+  const mine = myEntryCount(nid);
+  if(!isAdmin() && mine >= ENTRY_LIMIT){ showToast(`업체 등록은 1인당 최대 ${ENTRY_LIMIT}개까지예요. 기존 항목을 수정하거나 삭제해주세요.`); return; }
   openModal('내 업체 등록', `
-    <p class="helper">등록한 뒤에도 내가 올린 글은 목록에서 <b>수정·삭제</b>할 수 있어요.</p>
+    <p class="helper">등록한 뒤에도 내가 올린 글은 목록에서 <b>수정·삭제</b>할 수 있어요.${isAdmin() ? '' : ` 업체 등록은 <b>1인당 최대 ${ENTRY_LIMIT}개</b>예요 (현재 ${mine}개).`}</p>
     ${isAdmin() ? `
     <div class="card" style="background:#FFF8E6; font-size:13px;">
       <b>관리자 대리 등록</b> — 다른 동문(또는 회원이 아닌 업체)을 대신 올릴 땐 아래에 기수·성함을 입력하세요. 비워두면 내 정보(${me.batch ? esc(String(batchNumber(me.batch))) + '회 ' : ''}${esc(me.name)})로 등록돼요.
@@ -3094,6 +3142,7 @@ function addEntry(nid){
   if(mapUrl && !safeMapUrl(mapUrl)){ showToast('지도 링크는 네이버·카카오·구글 지도 주소만 쓸 수 있어요'); return; }
   if(company.length > 25 || service.length > 50 || address.length > 50){ showToast('글자 수를 줄여주세요 (상호 25 · 서비스 50 · 주소 50자)'); return; }
   if(!company){ showToast('상호명은 꼭 입력해주세요'); return; }
+  if(!isAdmin() && myEntryCount(nid) >= ENTRY_LIMIT){ showToast(`업체 등록은 1인당 최대 ${ENTRY_LIMIT}개까지예요`); closeModal(); return; }
   const id = uid();
   let nm = me.name, bt = me.batch ? batchNumber(me.batch) : '', byAdmin = false;
   if(isAdmin()){
@@ -3356,6 +3405,7 @@ function renderApp(){
   else if(state.tab === 'members') app.innerHTML = renderMembersTab();
   else app.innerHTML = renderMyTab();
   startEntriesListeners();
+  fillReadersBars();
 }
 
 function noticeCardFull(n, inList){
@@ -3364,6 +3414,7 @@ function noticeCardFull(n, inList){
     <div class="card">
       <h3>${n.pinned ? '📌 ' : ''}${n.title}</h3>
       <p class="meetup-meta" style="margin:2px 0 8px;">${memberDisplayName(n.authorId, n.author)} · ${n.date}${n.editedAt ? ' · 수정됨' : ''}</p>
+      ${inList ? (recordReader('notice', n.id), readersBarInline('notice', n.id)) : ''}
       ${richView(n)}
       ${entriesBoxHtml(n)}
       ${inList ? `<button class="btn btn-ghost btn-block" style="margin-top:12px;" onclick="openNoticeDetailModal('${n.id}')">💬 댓글 보기 · 쓰기</button>` : ''}
@@ -3427,7 +3478,7 @@ function renderNoticeTab(){
   `;
 }
 
-function postCardFull(p){
+function postCardFull(p, inList){
   const me = currentMember();
   const liked = me && p.likes.includes(me.id);
   const canEdit = me && me.id === p.authorId;
@@ -3436,6 +3487,7 @@ function postCardFull(p){
     <div class="card">
       <h3>${p.pinned ? '📌 ' : ''}${p.title || '(제목 없음)'}</h3>
       <p class="meetup-meta" style="margin:2px 0 10px;">${memberDisplayName(p.authorId, p.authorName)} · ${fmtTimeAgo(p.createdAt)}${p.editedAt ? ' · 수정됨' : ''}</p>
+      ${inList ? (recordReader('post', p.id), readersBarInline('post', p.id)) : ''}
       ${p.content ? richView(p, 'font-size:13.5px; line-height:1.6; margin:0 0 10px;') : ''}
       ${p.image ? `<img class="post-image" src="${p.image}">` : ''}
       <div class="post-actions-row">
@@ -3483,7 +3535,7 @@ function renderFeedList(){
   if(q) list = list.filter(p => (p.title||'').toLowerCase().includes(q) || itemPlain(p).toLowerCase().includes(q));
   if(list.length === 0) return q ? `<div class="empty">검색 결과가 없어요</div>` : `<div class="empty">아직 올라온 소식이 없어요, 첫 소식을 남겨보세요</div>`;
   if(q) return list.map(postCardCompact).join('');
-  return postCardFull(list[0]) + list.slice(1).map(postCardCompact).join('');
+  return postCardFull(list[0], true) + list.slice(1).map(postCardCompact).join('');
 }
 function onFeedSearch(v){
   state.feedSearch = v;
