@@ -318,6 +318,9 @@ main#app{padding:16px 16px 4px;}
   .rt-content .entry-table td:empty{display:none;}
   .entry-acts .btn{padding:5px 9px; font-size:12px;}
 }
+.ecard-thumb{width:34px; height:24px; object-fit:cover; border:1px solid #CBD5E1; border-radius:4px; cursor:zoom-in; flex:none; background:#fff;}
+.ec-co-wrap{display:flex; align-items:center; gap:6px; min-width:0;}
+.ec-co-wrap > span{min-width:0;}
 .ewho-link{color:#1D4ED8; text-decoration:underline; cursor:pointer;}
 .entry-table th{position:relative;}
 .col-rs{position:absolute; top:0; right:-5px; width:12px; height:100%; cursor:col-resize; touch-action:none; z-index:2;}
@@ -2980,7 +2983,7 @@ function entryTableHtml(list, nid, g, canAct){
   return (adm ? `<div class="line-ctl">보이는 줄 수 (넘치면 더보기) · ${lsel('svc','주요서비스')} ${lsel('addr','주소')}</div>` : '') + (adm ? `<div class="col-hint">↔ 제목줄의 칸 경계를 좌우로 끌어서 칸 너비를 조정하세요 (모든 회원 화면에 적용) · <a onclick="resetEntryCols()">처음 크기로</a></div>` : '') + `<div class="rt-wrap"><div class="rt-content"><table class="entry-table">
       <colgroup>${w.map(x => `<col style="width:${x}">`).join('')}${hasActs ? '<col style="width:11%">' : ''}</colgroup>
       <thead><tr>${th}${hasActs ? '<th></th>' : ''}</tr></thead>
-      <tbody>${list.map(e => `<tr><td class="ec-cat">${esc((e.category||'').trim() || '미분류')}</td><td class="ec-co">${esc(e.company)}</td><td class="ec-svc">${entryClamp(e.service)}</td><td class="ec-who">${entryWho(e)}</td><td class="ec-addr">${entryAddrCell(e)}</td>${hasActs ? `<td class="ec-acts">${canAct(e) ? `<div class="entry-acts"><button class="btn btn-ghost" onclick="openEntryEditModal('${e.id}','${nid}')">수정</button><button class="btn btn-ghost" onclick="deleteEntry('${e.id}','${nid}')">삭제</button></div>` : ''}</td>` : ''}</tr>`).join('')}</tbody>
+      <tbody>${list.map(e => `<tr><td class="ec-cat">${esc((e.category||'').trim() || '미분류')}</td><td class="ec-co">${entryCoCell(e)}</td><td class="ec-svc">${entryClamp(e.service)}</td><td class="ec-who">${entryWho(e)}</td><td class="ec-addr">${entryAddrCell(e)}</td>${hasActs ? `<td class="ec-acts">${canAct(e) ? `<div class="entry-acts"><button class="btn btn-ghost" onclick="openEntryEditModal('${e.id}','${nid}')">수정</button><button class="btn btn-ghost" onclick="deleteEntry('${e.id}','${nid}')">삭제</button></div>` : ''}</td>` : ''}</tr>`).join('')}</tbody>
     </table></div></div>`;
 }
 function entryColDrag(ev){
@@ -3178,6 +3181,88 @@ function toggleEntries(id){
   saveNotices(); logActivity('회원 직접 등록 ' + (n.entriesEnabled ? '켜기' : '끄기'), n.title);
   closeModal(); showToast(n.entriesEnabled ? '회원 직접 등록을 켰어요' : '회원 직접 등록을 껐어요 (등록된 내용은 보존돼요)'); renderAll();
 }
+
+/* ---------------------------------------------------------
+   명함 사진: 올릴 때 자동 축소 — 표에는 아주 작은 미리보기(thumb)만 저장하고,
+   큰 사진(img)은 별도 컬렉션 entryCards에 두어 눌렀을 때만 불러와요 (데이터 절약)
+--------------------------------------------------------- */
+window._enCard = undefined;   // undefined: 변경 없음 / null: 삭제 / {thumb,img}: 새 사진
+function cardCompress(file){
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onerror = reject;
+    reader.onload = ev => {
+      const img = new Image();
+      img.onerror = reject;
+      img.onload = () => {
+        const draw = (maxW, q) => {
+          const sc = Math.min(1, maxW / img.width);
+          const c = document.createElement('canvas');
+          c.width = Math.max(1, Math.round(img.width * sc)); c.height = Math.max(1, Math.round(img.height * sc));
+          const ctx = c.getContext('2d'); ctx.fillStyle = '#fff'; ctx.fillRect(0, 0, c.width, c.height);
+          ctx.drawImage(img, 0, 0, c.width, c.height);
+          return c.toDataURL('image/jpeg', q);
+        };
+        let w = 640, q = 0.62, full = draw(w, q);
+        while(full.length * 0.75 > 40 * 1024 && (q > 0.36 || w > 440)){   // 목표: 약 40KB 이하
+          if(q > 0.36) q -= 0.08; else w -= 60;
+          full = draw(w, q);
+        }
+        resolve({ img: full, thumb: draw(120, 0.5) });
+      };
+      img.src = ev.target.result;
+    };
+    reader.readAsDataURL(file);
+  });
+}
+async function handleCardSelect(input){
+  const f = input.files && input.files[0]; if(!f) return;
+  const note = document.getElementById('enCardNote'); if(note) note.textContent = '사진을 줄이는 중…';
+  try{
+    window._enCard = await cardCompress(f);
+    const prev = document.getElementById('enCardPrev');
+    if(prev){ prev.src = window._enCard.thumb; prev.style.display = 'block'; }
+    if(note) note.textContent = `자동으로 줄였어요 (약 ${Math.round(window._enCard.img.length * 0.75 / 1024)}KB)`;
+  }catch(e){ console.error(e); window._enCard = undefined; if(note) note.textContent = '사진을 읽지 못했어요. 다른 사진으로 시도해주세요.'; }
+}
+function clearCardPick(){
+  window._enCard = null;
+  const prev = document.getElementById('enCardPrev'); if(prev){ prev.style.display = 'none'; prev.removeAttribute('src'); }
+  const note = document.getElementById('enCardNote'); if(note) note.textContent = '저장하면 명함이 삭제돼요';
+  const f = document.getElementById('enCardFile'); if(f) f.value = '';
+}
+function entryCardFieldHtml(e){
+  const has = e && e.thumb;
+  return `<div class="field"><label>명함 사진 <span class="helper">(선택 · 앞면 1장, 자동으로 작게 줄여 저장돼요)</span></label>
+    <input id="enCardFile" type="file" accept="image/*" onchange="handleCardSelect(this)">
+    <div style="display:flex; align-items:center; gap:10px; margin-top:6px;">
+      <img id="enCardPrev" ${has ? `src="${e.thumb}"` : ''} style="width:64px; border:1px solid var(--line); border-radius:6px; ${has ? '' : 'display:none;'}">
+      <span id="enCardNote" class="helper"></span>
+      <a style="margin-left:auto; cursor:pointer; color:#B91C1C; font-size:12px;" onclick="clearCardPick()">명함 삭제</a>
+    </div></div>`;
+}
+function entryCoCell(e){
+  const t = e.thumb ? `<img class="ecard-thumb" src="${e.thumb}" alt="명함" title="눌러서 명함 크게 보기" onclick="openEntryCard('${e.id}')">` : '';
+  return `<span class="ec-co-wrap">${t}<span>${esc(e.company)}</span></span>`;
+}
+async function openEntryCard(id){
+  if(!requireLogin()) return;
+  const e = Object.values(entryStore).flat().find(x => x && x.id === id);
+  openModal(esc((e && e.company) || '명함'), `<div id="cardBody" style="text-align:center;"><p class="helper">불러오는 중…</p></div>`, true);
+  try{
+    const d = await db.collection('entryCards').doc(id).get();
+    const el = document.getElementById('cardBody'); if(!el) return;
+    const src = d.exists ? d.data().img : (e && e.thumb);
+    el.innerHTML = src ? `<img src="${src}" style="max-width:100%; border-radius:10px; border:1px solid var(--line);">` : '<p class="helper">명함 사진이 없어요.</p>';
+  }catch(err){ const el = document.getElementById('cardBody'); if(el) el.innerHTML = '<p class="helper">명함을 불러오지 못했어요.</p>'; }
+}
+function saveEntryCard(id, nid, card){
+  if(card === undefined) return {};
+  if(card === null){ db.collection('entryCards').doc(id).delete().catch(()=>{}); return { thumb: '' }; }
+  db.collection('entryCards').doc(id).set({ id, noticeId: nid, memberId: (currentMember() || {}).id || '', img: card.img, createdAt: Date.now() }).catch(()=>showToast('명함 저장 실패'));
+  return { thumb: card.thumb };
+}
+
 const ENTRY_LIMIT = 2; // 1인당 업체 등록 가능 수 (관리자 제외)
 function myEntryCount(nid){
   const me = currentMember(); if(!me) return 0;
@@ -3189,6 +3274,7 @@ function openEntryModal(nid, group){
   const me = currentMember();
   const mine = myEntryCount(nid);
   if(!isAdmin() && mine >= ENTRY_LIMIT){ showToast(`업체 등록은 1인당 최대 ${ENTRY_LIMIT}개까지예요. 기존 항목을 수정하거나 삭제해주세요.`); return; }
+  window._enCard = undefined;
   openModal('내 업체 등록', `
     <p class="helper">등록한 뒤에도 내가 올린 글은 목록에서 <b>수정·삭제</b>할 수 있어요.${isAdmin() ? '' : ` 업체 등록은 <b>1인당 최대 ${ENTRY_LIMIT}개</b>예요 (현재 ${mine}개).`}</p>
     ${isAdmin() ? `
@@ -3205,6 +3291,7 @@ function openEntryModal(nid, group){
     <div class="field"><label>주요서비스 <span class="helper">(선택 · 50자 이내)</span></label><input id="enService" placeholder="예: 한식 · 단체예약 (50자 이내)" maxlength="50"></div>
     <div class="field"><label>주소 <span class="helper">(선택 · 쓰면 이 글자를 눌러 네이버 지도로 자동 연결돼요)</span></label><input id="enAddress" placeholder="예: 서울 강남구 OO로 12 / 강남구청역 행당점 (50자 이내)" maxlength="250"></div>
     ${isAdmin() ? `<div class="field"><label>지도 링크 직접 지정 <span class="helper">(관리자 전용·선택 — 비우면 자동)</span></label><input id="enMap" placeholder="자동 연결이 엉뚱한 곳일 때만 네이버 지도 공유 링크 입력" maxlength="300"></div>` : ''}
+    ${entryCardFieldHtml(null)}
     <button class="btn btn-accent btn-block" onclick="addEntry('${nid}')">등록하기</button>
   `);
 }
@@ -3224,10 +3311,11 @@ function addEntry(nid){
     const on = ((document.getElementById('enName')||{}).value || '').trim();
     if(on){ nm = on; bt = Number((document.getElementById('enBatch')||{}).value) || ''; byAdmin = true; }
   }
-  db.collection('noticeEntries').doc(id).set({
+  const cardUpd = saveEntryCard(id, nid, window._enCard === null ? undefined : window._enCard);
+  db.collection('noticeEntries').doc(id).set(Object.assign({
     id, noticeId: nid, category: entryCatValue(), company, service, address,
     memberId: me.id, name: nm, batch: bt, byAdmin, mapUrl: mapUrl || '', group: window._entryGroup || '', createdAt: Date.now(),
-  }).then(() => { showToast('등록했어요'); }).catch(() => showToast('등록 실패, 다시 시도해주세요'));
+  }, cardUpd)).then(() => { showToast('등록했어요'); }).catch(() => showToast('등록 실패, 다시 시도해주세요'));
   logActivity('업체 직접 등록', company);
   closeModal();
 }
@@ -3237,6 +3325,7 @@ function openEntryEditModal(id, nid){
   if(!entryCanEdit(e)) return;
   const adm = isAdmin();
   const val = x => esc(x || '');
+  window._enCard = undefined;
   openModal('등록 내용 수정', `
     ${adm ? `<div class="card" style="background:#FFF8E6; font-size:13px;"><b>관리자 수정</b> — 기수·성함도 고칠 수 있어요.
       <div style="display:flex; gap:8px; margin-top:8px;">
@@ -3249,6 +3338,7 @@ function openEntryEditModal(id, nid){
     <div class="field"><label>주요서비스 <span class="helper">(${adm ? '' : '50자 이내'})</span></label><input id="enService" maxlength="${adm ? 200 : 50}" value="${val(e.service)}"></div>
     <div class="field"><label>주소 <span class="helper">(선택 · 쓰면 이 글자를 눌러 네이버 지도로 자동 연결돼요)</span></label><input id="enAddress" maxlength="${adm ? 250 : 250}" value="${val(e.address)}"></div>
     ${adm ? `<div class="field"><label>지도 링크 직접 지정 <span class="helper">(관리자 전용·선택 — 비우면 자동)</span></label><input id="enMap" maxlength="300" value="${val(e.mapUrl)}"></div>` : ''}
+    ${entryCardFieldHtml(e)}
     <button class="btn btn-accent btn-block" onclick="saveEntryEdit('${id}','${nid}')">저장</button>
   `);
 }
@@ -3264,7 +3354,7 @@ function saveEntryEdit(id, nid){
   let mapUrl = e.mapUrl || '';
   if(adm){ mapUrl = v('enMap') || sp.url; if(mapUrl && !safeMapUrl(mapUrl)){ showToast('지도 링크는 네이버·카카오·구글 지도 주소만 쓸 수 있어요'); return; } }
   else if(address !== e.address) mapUrl = '';
-  const upd = { category: entryCatValue(), company, service, address, mapUrl: mapUrl || '', editedAt: Date.now() };
+  const upd = Object.assign({ category: entryCatValue(), company, service, address, mapUrl: mapUrl || '', editedAt: Date.now() }, saveEntryCard(id, nid, window._enCard));
   if(adm){ upd.name = v('enName') || e.name; upd.batch = Number(v('enBatch')) || ''; upd.group = (document.getElementById('enGroup') || {}).value || ''; }
   db.collection('noticeEntries').doc(id).update(upd).then(() => showToast('수정했어요')).catch(() => showToast('수정 실패, 다시 시도해주세요'));
   logActivity('등록 명단 수정', company);
@@ -3274,6 +3364,7 @@ function deleteEntry(id, nid){
   const e0 = (entryStore[nid] || []).find(x => x.id === id);
   if(!entryCanEdit(e0)) return;
   if(!confirm('이 등록 건을 삭제할까요?')) return;
+  db.collection('entryCards').doc(id).delete().catch(()=>{});
   db.collection('noticeEntries').doc(id).delete().then(() => showToast('삭제했어요')).catch(()=>showToast('삭제 실패'));
   logActivity('등록 명단 삭제', id);
 }
