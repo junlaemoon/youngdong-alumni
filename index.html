@@ -636,7 +636,7 @@ async function init(){
     db.collection('meta').doc('texts').onSnapshot(d => {
       state.texts = d.exists ? (d.data() || {}) : {};
       applyHeaderTexts();
-      if(state.loaded && !modalIsOpen()) renderApp();
+      if(state.loaded){ renderTabs(); if(!modalIsOpen()) renderApp(); }
     }, () => {});
   }catch(e){}
   try{
@@ -974,6 +974,7 @@ async function fillReadersBars(){
 --------------------------------------------------------- */
 function textDefs(){
   const g = i => ENTRY_GROUP_INFO[ENTRY_GROUPS[i]].desc;
+  const defCats = i => ENTRY_CATS.filter(c => GROUP_BY_CAT[c] === i || c === '기타').join(', ');
   return {
     hdrEyebrow: { label: '맨 위 영문 문구', def: 'YOUNGDONG ALUMNI ASSOCIATION' },
     hdrTitle:   { label: '맨 위 큰 제목', def: '영동고등학교 총동문회' },
@@ -985,11 +986,39 @@ function textDefs(){
     entDesc2:   { label: `${ENTRY_GROUPS[2]} 박스 설명`, def: g(2), multi: true },
     dealsHelp:  { label: '동문장터 하단 안내', def: '결제와 배송은 업체와 동문이 직접 진행해요. 동문회는 소개와 참여자 모집만 도와요.', multi: true },
     membersSub: { label: '회원 탭 소개 문구', def: '함께하는 우리 동문들' },
+    tabNotice:  { label: '메뉴 이름 · 공지', def: '공지', short: true },
+    tabFeed:    { label: '메뉴 이름 · 소식', def: '소식', short: true },
+    tabSchedule:{ label: '메뉴 이름 · 일정', def: '일정', short: true },
+    tabDeals:   { label: '메뉴 이름 · 동문장터', def: '동문장터', short: true },
+    tabMembers: { label: '메뉴 이름 · 회원', def: '회원', short: true },
+    tabMypage:  { label: '메뉴 이름 · 마이페이지', def: '마이페이지', short: true },
+    entName0:   { label: '업체 박스1 이름', def: ENTRY_GROUPS[0], short: true },
+    entIcon0:   { label: '업체 박스1 아이콘(이모지)', def: ENTRY_GROUP_INFO[ENTRY_GROUPS[0]].icon, short: true },
+    entName1:   { label: '업체 박스2 이름', def: ENTRY_GROUPS[1], short: true },
+    entIcon1:   { label: '업체 박스2 아이콘(이모지)', def: ENTRY_GROUP_INFO[ENTRY_GROUPS[1]].icon, short: true },
+    entName2:   { label: '업체 박스3 이름', def: ENTRY_GROUPS[2], short: true },
+    entIcon2:   { label: '업체 박스3 아이콘(이모지)', def: ENTRY_GROUP_INFO[ENTRY_GROUPS[2]].icon, short: true },
+    catList0:   { label: '박스1 업종 목록 (쉼표로 구분)', def: defCats(0), multi: true },
+    catList1:   { label: '박스2 업종 목록 (쉼표로 구분)', def: defCats(1), multi: true },
+    catList2:   { label: '박스3 업종 목록 (쉼표로 구분)', def: defCats(2), multi: true },
+    entLimit:   { label: '업체 등록 가능 수 (1인당, 숫자)', def: '2', num: true, short: true },
   };
 }
 function TX(key){
   const d = textDefs()[key]; const v = state.texts && state.texts[key];
   return (typeof v === 'string' && v.trim() !== '') ? v : (d ? d.def : '');
+}
+// 박스(대분류) 이름·아이콘: 데이터에는 원래 이름이 키로 남고, 화면에만 바꾼 이름이 보여요
+function GL(g){ const i = ENTRY_GROUPS.indexOf(g); return i < 0 ? g : TX('entName' + i); }
+function GI(g){ const i = ENTRY_GROUPS.indexOf(g); return i < 0 ? (ENTRY_GROUP_INFO[g] || {}).icon || '' : TX('entIcon' + i); }
+function entryLimit(){ const n = parseInt(TX('entLimit'), 10); return (n >= 1 && n <= 50) ? n : 2; }
+function catListFor(i){
+  const v = state.texts && state.texts['catList' + i];
+  if(typeof v === 'string' && v.trim()){
+    const arr = v.split(/[,，\n]/).map(x => x.trim()).filter(Boolean);
+    return arr.filter((x, k) => arr.indexOf(x) === k);
+  }
+  return ENTRY_CATS.filter(c => GROUP_BY_CAT[c] === i || c === '기타');
 }
 function TXH(key){ return esc(TX(key)).replace(/\n/g, '<br>'); }
 function txPen(key){
@@ -1020,20 +1049,36 @@ function openTextEdit(key){
     <button class="btn btn-ghost btn-block" onclick="resetTextEdit('${key}')">기본 문구로 되돌리기</button>
   `, true);
 }
+function openTextManager(){
+  if(!isAdmin()) return;
+  const defs = textDefs();
+  openModal('앱 문구·설정 관리', `
+    <p class="helper" style="margin-top:0;">고치고 싶은 항목의 ✏️를 누르세요. 저장하면 모든 회원 화면에 바로 적용돼요. (소개 박스·칸 너비·보이는 줄 수는 각 화면에서 바로 고칠 수 있어요)</p>
+    ${Object.keys(defs).map(k => { const cur = TX(k); const custom = state.texts && typeof state.texts[k] === 'string' && state.texts[k].trim() !== ''; return `
+      <div class="req-row" style="align-items:flex-start; gap:8px;">
+        <span style="min-width:0; flex:1;"><span class="req-name">${esc(defs[k].label)}${custom ? ' <span class="req-sub" style="color:#B45309;">· 수정됨</span>' : ''}</span>
+        <div class="req-sub" style="white-space:pre-wrap; word-break:break-all;">${esc(cur.length > 90 ? cur.slice(0, 90) + '…' : cur)}</div></span>
+        <button class="btn btn-ghost btn-sm" onclick="openTextEdit('${k}')">✏️ 수정</button>
+      </div>`; }).join('')}
+  `, true);
+}
 function saveTextEdit(key){
   if(!isAdmin()) return;
   const v = ((document.getElementById('txInput') || {}).value || '').trim();
   if(!v){ showToast('내용을 입력해주세요 (비우려면 \'기본 문구로 되돌리기\')'); return; }
+  const dd = textDefs()[key];
+  if(dd && dd.num){ const n = parseInt(v, 10); if(!(n >= 1 && n <= 50) || String(n) !== v){ showToast('1~50 사이의 숫자로 입력해주세요'); return; } }
+  if(dd && dd.short && v.length > 14){ showToast('14자 이내로 입력해주세요'); return; }
   state.texts = Object.assign({}, state.texts || {}, { [key]: v });
   db.collection('meta').doc('texts').set({ [key]: v }, { merge: true }).catch(() => showToast('저장 실패, 다시 시도해주세요'));
   logActivity('문구 수정', textDefs()[key].label);
-  closeModal(); applyHeaderTexts(); renderApp(); showToast('저장했어요');
+  closeModal(); applyHeaderTexts(); renderTabs(); renderApp(); showToast('저장했어요');
 }
 function resetTextEdit(key){
   if(!isAdmin()) return;
   const t = Object.assign({}, state.texts || {}); delete t[key]; state.texts = t;
   db.collection('meta').doc('texts').set({ [key]: firebase.firestore.FieldValue.delete() }, { merge: true }).catch(() => showToast('저장 실패, 다시 시도해주세요'));
-  closeModal(); applyHeaderTexts(); renderApp(); showToast('기본 문구로 되돌렸어요');
+  closeModal(); applyHeaderTexts(); renderTabs(); renderApp(); showToast('기본 문구로 되돌렸어요');
 }
 let pendingReadersFor = null;
 function trackView(type, id){
@@ -2892,10 +2937,12 @@ function setEntryGroup(nid, g){ entryGroupSel[nid] = g; entryFilter[nid] = ''; r
 const entryFilter = {};
 function entryCatList(nid, group){
   const gi = group ? ENTRY_GROUPS.indexOf(group) : -1;
-  const base = gi < 0 ? ENTRY_CATS.slice() : ENTRY_CATS.filter(c => GROUP_BY_CAT[c] === gi || c === '기타');
+  let base;
+  if(gi >= 0) base = catListFor(gi);
+  else { base = []; [0,1,2].forEach(i => catListFor(i).forEach(c => { if(!base.includes(c)) base.push(c); })); ENTRY_CATS.forEach(c => { if(!base.includes(c)) base.push(c); }); }
   (entryStore[nid] || []).forEach(e => {
     const c = (e.category || '').trim();
-    if(c && !base.includes(c) && !ENTRY_CATS.includes(c) && (!group || groupOf(e) === group)) base.push(c);
+    if(c && !base.includes(c) && (gi >= 0 ? groupOf(e) === group : true)) base.push(c);
   });
   return base;
 }
@@ -3043,7 +3090,7 @@ function entryBoxHtml(nid, g, items){
   return `
     <div class="card" style="margin-top:14px; border:1px solid var(--line);">
       <div style="display:flex; justify-content:space-between; align-items:center; gap:8px;">
-        <h3 style="margin:0; font-size:16px;">${info.icon} ${g} <span style="font-weight:600; color:var(--ink-soft); font-size:13px;">${items.length}</span></h3>
+        <h3 style="margin:0; font-size:16px;">${esc(GI(g))} ${esc(GL(g))}${ENTRY_GROUPS.includes(g) ? txPen('entName' + ENTRY_GROUPS.indexOf(g)) : ''} <span style="font-weight:600; color:var(--ink-soft); font-size:13px;">${items.length}</span></h3>
         ${g !== '미분류' ? `<button class="btn btn-accent btn-sm" onclick="openEntryModal('${nid}','${g}')">+ 등록</button>` : ''}
       </div>
       <p class="helper" style="margin:4px 0 10px;">${ENTRY_GROUPS.includes(g) ? TXH('entDesc' + ENTRY_GROUPS.indexOf(g)) + txPen('entDesc' + ENTRY_GROUPS.indexOf(g)) : info.desc}</p>
@@ -3269,7 +3316,6 @@ function saveEntryCard(id, nid, card){
   return { thumb: card.thumb };
 }
 
-const ENTRY_LIMIT = 2; // 1인당 업체 등록 가능 수 (관리자 제외)
 function myEntryCount(nid){
   const me = currentMember(); if(!me) return 0;
   return (entryStore[nid] || []).filter(e => (e.memberId === me.id && !e.byAdmin) || entryOwnerByName(e, me)).length;
@@ -3279,10 +3325,10 @@ function openEntryModal(nid, group){
   window._entryGroup = group && ENTRY_GROUPS.includes(group) ? group : '';
   const me = currentMember();
   const mine = myEntryCount(nid);
-  if(!isAdmin() && mine >= ENTRY_LIMIT){ showToast(`업체 등록은 1인당 최대 ${ENTRY_LIMIT}개까지예요. 기존 항목을 수정하거나 삭제해주세요.`); return; }
+  if(!isAdmin() && mine >= entryLimit()){ showToast(`업체 등록은 1인당 최대 ${entryLimit()}개까지예요. 기존 항목을 수정하거나 삭제해주세요.`); return; }
   window._enCard = undefined;
   openModal('내 업체 등록', `
-    <p class="helper">등록한 뒤에도 내가 올린 글은 목록에서 <b>수정·삭제</b>할 수 있어요.${isAdmin() ? '' : ` 업체 등록은 <b>1인당 최대 ${ENTRY_LIMIT}개</b>예요 (현재 ${mine}개).`}</p>
+    <p class="helper">등록한 뒤에도 내가 올린 글은 목록에서 <b>수정·삭제</b>할 수 있어요.${isAdmin() ? '' : ` 업체 등록은 <b>1인당 최대 ${entryLimit()}개</b>예요 (현재 ${mine}개).`}</p>
     ${isAdmin() ? `
     <div class="card" style="background:#FFF8E6; font-size:13px;">
       <b>관리자 대리 등록</b> — 다른 동문(또는 회원이 아닌 업체)을 대신 올릴 땐 아래에 기수·성함을 입력하세요. 비워두면 내 정보(${me.batch ? esc(String(batchNumber(me.batch))) + '회 ' : ''}${esc(me.name)})로 등록돼요.
@@ -3291,7 +3337,7 @@ function openEntryModal(nid, group){
         <input id="enName" placeholder="성함" maxlength="20" style="flex:1;">
       </div>
     </div>` : `<div class="card" style="background:#F7F8FA; font-size:13px;">기수·성함: <b>${me.batch ? esc(String(batchNumber(me.batch))) + '회 ' : ''}${esc(me.name)}</b> (내 정보로 자동 입력)</div>`}
-    ${window._entryGroup ? `<div class="card" style="background:#EEF4FF; font-size:13px;">등록 분야: <b>${window._entryGroup}</b></div>` : ''}
+    ${window._entryGroup ? `<div class="card" style="background:#EEF4FF; font-size:13px;">등록 분야: <b>${esc(GL(window._entryGroup))}</b></div>` : ''}
     ${entryCatFieldHtml(nid, '', window._entryGroup)}
     <div class="field"><label>상호명 *</label><input id="enCompany" placeholder="예: 영동식당" maxlength="25"></div>
     <div class="field"><label>주요서비스 <span class="helper">(선택 · 50자 이내)</span></label><input id="enService" placeholder="예: 한식 · 단체예약 (50자 이내)" maxlength="50"></div>
@@ -3310,7 +3356,7 @@ function addEntry(nid){
   if(mapUrl && !safeMapUrl(mapUrl)){ showToast('지도 링크는 네이버·카카오·구글 지도 주소만 쓸 수 있어요'); return; }
   if(company.length > 25 || service.length > 50 || address.length > 50){ showToast('글자 수를 줄여주세요 (상호 25 · 서비스 50 · 주소 50자)'); return; }
   if(!company){ showToast('상호명은 꼭 입력해주세요'); return; }
-  if(!isAdmin() && myEntryCount(nid) >= ENTRY_LIMIT){ showToast(`업체 등록은 1인당 최대 ${ENTRY_LIMIT}개까지예요`); closeModal(); return; }
+  if(!isAdmin() && myEntryCount(nid) >= entryLimit()){ showToast(`업체 등록은 1인당 최대 ${entryLimit()}개까지예요`); closeModal(); return; }
   const id = uid();
   let nm = me.name, bt = me.batch ? batchNumber(me.batch) : '', byAdmin = false;
   if(isAdmin()){
@@ -3339,7 +3385,7 @@ function openEntryEditModal(id, nid){
         <input id="enName" placeholder="성함" maxlength="30" style="flex:1;" value="${val(e.name)}">
       </div></div>` : `<div class="card" style="background:#F7F8FA; font-size:13px;">기수·성함: <b>${e.batch ? e.batch + '회 ' : ''}${val(e.name)}</b></div>`}
     ${entryCatFieldHtml(nid, e.category, groupOf(e))}
-    ${adm ? `<div class="field"><label>대분류 <span class="helper">(관리자 전용 — 자동 판정이 틀릴 때만 지정, 현재 자동: ${esc(groupOf(Object.assign({}, e, {group:''})) || '판정 불가')})</span></label><select id="enGroup"><option value="">(자동)</option>${ENTRY_GROUPS.map(g => `<option value="${g}" ${e.group === g ? 'selected' : ''}>${g}</option>`).join('')}</select></div>` : ''}
+    ${adm ? `<div class="field"><label>대분류 <span class="helper">(관리자 전용 — 자동 판정이 틀릴 때만 지정, 현재 자동: ${esc(groupOf(Object.assign({}, e, {group:''})) || '판정 불가')})</span></label><select id="enGroup"><option value="">(자동)</option>${ENTRY_GROUPS.map(g => `<option value="${g}" ${e.group === g ? 'selected' : ''}>${esc(GL(g))}</option>`).join('')}</select></div>` : ''}
     <div class="field"><label>상호명 *</label><input id="enCompany" maxlength="${adm ? 100 : 25}" value="${val(e.company)}"></div>
     <div class="field"><label>주요서비스 <span class="helper">(${adm ? '' : '50자 이내'})</span></label><input id="enService" maxlength="${adm ? 200 : 50}" value="${val(e.service)}"></div>
     <div class="field"><label>주소 <span class="helper">(선택 · 쓰면 이 글자를 눌러 네이버 지도로 자동 연결돼요)</span></label><input id="enAddress" maxlength="${adm ? 250 : 250}" value="${val(e.address)}"></div>
@@ -3529,15 +3575,15 @@ function toggleFeature(key){
 }
 function renderTabs(){
   const tabs = [
-    {id:'notice', label:'공지'},
-    {id:'feed', label:'소식'},
-    {id:'schedule', label:'일정'},
-    {id:'members', label:'회원'},
-    {id:'mypage', label:'마이페이지'},
+    {id:'notice', label:TX('tabNotice')},
+    {id:'feed', label:TX('tabFeed')},
+    {id:'schedule', label:TX('tabSchedule')},
+    {id:'members', label:TX('tabMembers')},
+    {id:'mypage', label:TX('tabMypage')},
   ];
-  if(state.features && state.features.deals) tabs.splice(3, 0, {id:'deals', label:'동문장터'});
+  if(state.features && state.features.deals) tabs.splice(3, 0, {id:'deals', label:TX('tabDeals')});
   document.getElementById('tabs').innerHTML = tabs.map(t =>
-    `<button class="tab-btn ${state.tab===t.id?'active':''}" onclick="switchTab('${t.id}')">${t.label}</button>`
+    `<button class="tab-btn ${state.tab===t.id?'active':''}" onclick="switchTab('${t.id}')">${esc(t.label)}</button>`
   ).join('');
 }
 function switchTab(id){ state.tab = id; renderApp(); renderTabs(); }
@@ -4210,6 +4256,7 @@ function renderMembersTab(){
     ${pendingCount ? `<button class="btn btn-accent btn-block" onclick="openPendingMeetupsModal()">🕓 승인 대기 모임 (${pendingCount})</button>` : ''}
     <button class="btn btn-ghost btn-block" onclick="exportYearlyReport()">📊 연간 리포트 엑셀 다운로드</button>
     <button class="btn btn-ghost btn-block" onclick="exportAllData()">⬇ 전체 데이터 백업(내보내기)</button>
+    <button class="btn btn-accent btn-block" onclick="openTextManager()">✏️ 앱 문구·설정 관리 (메뉴 이름, 업체 박스, 안내 문구)</button>
     <button class="btn btn-ghost btn-block" onclick="toggleFeature('deals')">🛍 동문장터 ${state.features && state.features.deals ? '끄기 (현재 켜짐)' : '켜기 (현재 꺼짐)'}</button>
     <button class="btn btn-accent btn-block" onclick="openStatsModal()">📈 이용 통계 (방문·조회수·회원별)</button>
     <button class="btn btn-ghost btn-block" onclick="openActivityLogModal()">🗒 관리자 활동 로그 보기</button>
