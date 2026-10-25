@@ -3627,11 +3627,43 @@ function renderApp(){
   fillReadersBars();
 }
 
-function noticeCardFull(n, inList){
+
+/* ---------------------------------------------------------
+   목록 글 펼치기/접기 (회원마다 기기에 기억) — 기본값: 맨 위 글 펼침(관리자가 설정 가능)
+--------------------------------------------------------- */
+function topOpenDefault(){ return !(state.features && state.features.topOpen === false); }
+function foldMap(){ try{ return JSON.parse(localStorage.getItem('rc_fold') || '{}'); }catch(e){ return {}; } }
+function isCardOpen(type, id, idx){
+  const m = foldMap(); const k = type + '_' + id;
+  if(k in m) return !!m[k];
+  return idx === 0 && topOpenDefault();
+}
+function toggleFold(type, id, idx){
+  const m = foldMap(); const k = type + '_' + id;
+  m[k] = !isCardOpen(type, id, idx);
+  const ks = Object.keys(m); if(ks.length > 300) ks.slice(0, ks.length - 300).forEach(x => delete m[x]);
+  try{ localStorage.setItem('rc_fold', JSON.stringify(m)); }catch(e){}
+  const area = document.getElementById(type === 'notice' ? 'noticeListArea' : 'feedListArea');
+  if(area) area.innerHTML = type === 'notice' ? renderNoticeList() : renderFeedList();
+  startEntriesListeners(); fillReadersBars();
+}
+function foldBtn(type, id, idx, open){
+  return `<button class="btn btn-ghost btn-sm fold-btn" style="white-space:nowrap; flex:none;" onclick="event.stopPropagation(); toggleFold('${type}','${id}',${idx})">${open ? '▲ 접기' : '▼ 펼치기'}</button>`;
+}
+function toggleTopOpen(){
+  if(!isAdmin()) return;
+  const on = !topOpenDefault();
+  state.features = Object.assign({}, state.features, { topOpen: on });
+  db.collection('meta').doc('features').set({ topOpen: on }, { merge: true }).catch(() => showToast('저장 실패, 다시 시도해주세요'));
+  logActivity('맨 위 글 기본 상태', on ? '펼침' : '접힘');
+  showToast(on ? '맨 위 글을 기본으로 펼쳐 보여줘요' : '맨 위 글도 기본으로 접어서 보여줘요');
+  renderApp();
+}
+function noticeCardFull(n, inList, idx){
   const admin = isAdmin();
   return `
     <div class="card">
-      <h3>${n.pinned ? '📌 ' : ''}${n.title}</h3>
+      <div style="display:flex; justify-content:space-between; align-items:flex-start; gap:8px;"><h3 style="margin:0;">${n.pinned ? '📌 ' : ''}${n.title}</h3>${inList ? foldBtn('notice', n.id, idx || 0, true) : ''}</div>
       <p class="meetup-meta" style="margin:2px 0 8px;">${memberDisplayName(n.authorId, n.author)} · ${n.date}${n.editedAt ? ' · 수정됨' : ''}</p>
       ${inList ? (recordReader('notice', n.id), readersBarInline('notice', n.id)) : ''}
       ${richView(n)}
@@ -3659,11 +3691,14 @@ function togglePinPost(id){
   savePosts(); logActivity(p.pinned ? '소식 상단 고정' : '소식 고정 해제', p.title || '');
   closeModal(); showToast(p.pinned ? '상단에 고정했어요' : '고정을 해제했어요'); renderAll();
 }
-function noticeCardCompact(n){
+function noticeCardCompact(n, idx, withFold){
   return `
-    <div class="meetup" style="cursor:pointer;" onclick="openNoticeDetailModal('${n.id}')">
-      <p class="meetup-title" style="margin:0 0 4px;">${n.pinned ? '📌 ' : ''}${n.title}</p>
-      <p class="meetup-meta" style="margin:0;">${memberDisplayName(n.authorId, n.author)} · ${n.date}</p>
+    <div class="meetup" style="cursor:pointer; display:flex; justify-content:space-between; align-items:center; gap:8px;" onclick="openNoticeDetailModal('${n.id}')">
+      <div style="min-width:0;">
+        <p class="meetup-title" style="margin:0 0 4px;">${n.pinned ? '📌 ' : ''}${n.title}</p>
+        <p class="meetup-meta" style="margin:0;">${memberDisplayName(n.authorId, n.author)} · ${n.date}</p>
+      </div>
+      ${withFold ? foldBtn('notice', n.id, idx, false) : ''}
     </div>
   `;
 }
@@ -3679,8 +3714,8 @@ function renderNoticeList(){
   const all = pinFirst(state.notices);
   const list = q ? all.filter(n => n.title.toLowerCase().includes(q) || itemPlain(n).toLowerCase().includes(q)) : all;
   if(list.length === 0) return q ? `<div class="empty">검색 결과가 없어요</div>` : `<div class="empty">아직 공지가 없어요</div>`;
-  if(q) return list.map(noticeCardCompact).join('');
-  return noticeCardFull(list[0], true) + (list.length > 1 ? list.slice(1).map(noticeCardCompact).join('') : '');
+  if(q) return list.map(n => noticeCardCompact(n, 0, false)).join('');
+  return list.map((n, i) => isCardOpen('notice', n.id, i) ? noticeCardFull(n, true, i) : noticeCardCompact(n, i, true)).join('');
 }
 function onNoticeSearch(v){
   state.noticeSearch = v;
@@ -3697,14 +3732,14 @@ function renderNoticeTab(){
   `;
 }
 
-function postCardFull(p, inList){
+function postCardFull(p, inList, idx){
   const me = currentMember();
   const liked = me && p.likes.includes(me.id);
   const canEdit = me && me.id === p.authorId;
   const canDelete = me && (me.id === p.authorId || isAdmin());
   return `
     <div class="card">
-      <h3>${p.pinned ? '📌 ' : ''}${p.title || '(제목 없음)'}</h3>
+      <div style="display:flex; justify-content:space-between; align-items:flex-start; gap:8px;"><h3 style="margin:0;">${p.pinned ? '📌 ' : ''}${p.title || '(제목 없음)'}</h3>${inList ? foldBtn('feed', p.id, idx || 0, true) : ''}</div>
       <p class="meetup-meta" style="margin:2px 0 10px;">${memberDisplayName(p.authorId, p.authorName)} · ${fmtTimeAgo(p.createdAt)}${p.editedAt ? ' · 수정됨' : ''}</p>
       ${inList ? (recordReader('post', p.id), readersBarInline('post', p.id)) : ''}
       ${p.content ? richView(p, 'font-size:13.5px; line-height:1.6; margin:0 0 10px;') : ''}
@@ -3731,7 +3766,7 @@ function postCardFull(p, inList){
     </div>
   `;
 }
-function postCardCompact(p){
+function postCardCompact(p, idx, withFold){
   return `
     <div class="meetup" style="cursor:pointer; display:flex; gap:12px; align-items:center;" onclick="openPostDetailModal('${p.id}')">
       ${p.image ? `<img src="${p.image}" style="width:56px;height:56px;border-radius:10px;object-fit:cover;flex-shrink:0;">` : `<div class="post-avatar" style="flex-shrink:0;">${memberDisplayName(p.authorId, p.authorName).slice(0,1)}</div>`}
@@ -3739,6 +3774,7 @@ function postCardCompact(p){
         <p class="meetup-title" style="margin:0 0 3px; font-size:13.5px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">${p.pinned ? '📌 ' : ''}${p.title || '(제목 없음)'}</p>
         <p class="meetup-meta" style="margin:0;">${memberDisplayName(p.authorId, p.authorName)} · ${fmtTimeAgo(p.createdAt)} · ♡${p.likes.length} 💬${p.comments.length}</p>
       </div>
+      ${withFold ? foldBtn('feed', p.id, idx, false) : ''}
     </div>
   `;
 }
@@ -3753,8 +3789,8 @@ function renderFeedList(){
   let list = pinFirst([...state.posts].sort((a,b) => b.createdAt - a.createdAt));
   if(q) list = list.filter(p => (p.title||'').toLowerCase().includes(q) || itemPlain(p).toLowerCase().includes(q));
   if(list.length === 0) return q ? `<div class="empty">검색 결과가 없어요</div>` : `<div class="empty">아직 올라온 소식이 없어요, 첫 소식을 남겨보세요</div>`;
-  if(q) return list.map(postCardCompact).join('');
-  return postCardFull(list[0], true) + list.slice(1).map(postCardCompact).join('');
+  if(q) return list.map(p => postCardCompact(p, 0, false)).join('');
+  return list.map((p, i) => isCardOpen('feed', p.id, i) ? postCardFull(p, true, i) : postCardCompact(p, i, true)).join('');
 }
 function onFeedSearch(v){
   state.feedSearch = v;
@@ -4257,6 +4293,7 @@ function renderMembersTab(){
     <button class="btn btn-ghost btn-block" onclick="exportYearlyReport()">📊 연간 리포트 엑셀 다운로드</button>
     <button class="btn btn-ghost btn-block" onclick="exportAllData()">⬇ 전체 데이터 백업(내보내기)</button>
     <button class="btn btn-accent btn-block" onclick="openTextManager()">✏️ 앱 문구·설정 관리 (메뉴 이름, 업체 박스, 안내 문구)</button>
+    <button class="btn btn-ghost btn-block" onclick="toggleTopOpen()">📂 맨 위 글 기본 상태: ${topOpenDefault() ? '펼침 (누르면 접힘으로)' : '접힘 (누르면 펼침으로)'}</button>
     <button class="btn btn-ghost btn-block" onclick="toggleFeature('deals')">🛍 동문장터 ${state.features && state.features.deals ? '끄기 (현재 켜짐)' : '켜기 (현재 꺼짐)'}</button>
     <button class="btn btn-accent btn-block" onclick="openStatsModal()">📈 이용 통계 (방문·조회수·회원별)</button>
     <button class="btn btn-ghost btn-block" onclick="openActivityLogModal()">🗒 관리자 활동 로그 보기</button>
