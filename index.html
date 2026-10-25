@@ -2169,14 +2169,29 @@ function openParticipantsModal(id){
   if(!mt) return;
   openModal(mt.title, `<p class="helper">${fmtDateKR(mt.date)} ${mt.time} · ${mt.location}</p>${participantsSectionHtml(mt)}`, true);
 }
+function inviteCandidatesHtml(meetupId, query){
+  const mt = state.meetups.find(m => m.id === meetupId);
+  if(!mt) return '';
+  const q = (query || '').trim().toLowerCase();
+  const already = new Set(mt.participants.map(p => p.memberId));
+  let candidates = state.members.filter(m => !already.has(m.id));
+  if(q) candidates = candidates.filter(m => m.name.toLowerCase().includes(q) || String(m.batch||'').toLowerCase().includes(q));
+  if(candidates.length === 0) return `<p class="helper" style="padding:10px 0;">${q ? '검색 결과가 없어요' : '초대할 수 있는 동문이 없어요 (모두 이미 참가자이거나 초대됐어요)'}</p>`;
+  return candidates.slice(0, 200).map(m => `
+    <div class="req-row">
+      <span class="req-name">${esc(m.name)}${m.batch ? ' · '+esc(displayBatch(m.batch)) : ''}</span>
+      <button class="btn btn-accent btn-sm" onclick="inviteMember('${meetupId}', '${m.id}')">초대</button>
+    </div>`).join('') + (candidates.length > 200 ? '<p class="helper">검색어를 입력하면 더 좁혀서 볼 수 있어요</p>' : '');
+}
+// 검색창은 그대로 두고 목록만 바꿔서, 한글 입력 중 깜박이거나 글자가 끊기지 않게 함
+function onInviteSearch(meetupId, v){
+  const el = document.getElementById('inviteList');
+  if(el) el.innerHTML = inviteCandidatesHtml(meetupId, v);
+}
 function openInviteModal(meetupId, query){
   if(!isAdmin()) return;
   const mt = state.meetups.find(m => m.id === meetupId);
   if(!mt) return;
-  const q = (query || '').trim().toLowerCase();
-  const already = new Set(mt.participants.map(p => p.memberId));
-  let candidates = state.members.filter(m => !already.has(m.id));
-  if(q) candidates = candidates.filter(m => m.name.toLowerCase().includes(q) || (m.batch||'').toLowerCase().includes(q));
   const groups = getSubgroups(mt);
   const groupSelect = groups.length ? `
     <div class="field"><label>소그룹 지정 (선택)</label>
@@ -2188,21 +2203,9 @@ function openInviteModal(meetupId, query){
   openModal('회원 초대', `
     <p class="helper">참석 등급이나 모임 신청 권한과 상관없이, 선택한 동문을 바로 "확정" 상태로 추가해요.</p>
     ${groupSelect}
-    <div class="field"><input id="inviteSearchInput" placeholder="🔍 이름·기수 검색" value="${query||''}" oninput="openInviteModal('${meetupId}', this.value)"></div>
-    <div class="card" style="padding:4px 16px; max-height:320px; overflow-y:auto;">
-      ${candidates.length === 0 ? '<p class="helper" style="padding:10px 0;">초대할 수 있는 동문이 없어요</p>' : candidates.map(m => `
-        <div class="req-row">
-          <span class="req-name">${m.name}${m.batch ? ' · '+displayBatch(m.batch) : ''}</span>
-          <button class="btn btn-accent btn-sm" onclick="inviteMember('${meetupId}', '${m.id}')">초대</button>
-        </div>
-      `).join('')}
-    </div>
+    <div class="field"><input id="inviteSearchInput" placeholder="🔍 이름·기수 검색" value="${esc(query||'')}" oninput="onInviteSearch('${meetupId}', this.value)"></div>
+    <div class="card" id="inviteList" style="padding:4px 16px; max-height:320px; overflow-y:auto;">${inviteCandidatesHtml(meetupId, query)}</div>
   `, true);
-  // 검색 입력 중 모달이 다시 그려져도 포커스가 유지되도록
-  setTimeout(() => {
-    const el = document.getElementById('inviteSearchInput');
-    if(el){ el.focus(); el.selectionStart = el.selectionEnd = el.value.length; }
-  }, 0);
 }
 function inviteMember(meetupId, memberId){
   const mt = state.meetups.find(m => m.id === meetupId);
@@ -2218,7 +2221,10 @@ function inviteMember(meetupId, memberId){
   saveMeetups();
   logActivity('회원 초대', `${mt.title} · ${m.name}`);
   showToast(`${m.name}님에게 초대를 보냈어요 (수락 전까지는 신청 명단에 안 보여요)`);
-  openInviteModal(meetupId); // 목록 갱신하며 계속 초대할 수 있게 모달 유지
+  // 목록만 갱신해서 검색어·소그룹 선택을 유지한 채 계속 초대할 수 있게 함
+  const sv = (document.getElementById('inviteSearchInput') || {}).value || '';
+  const lst = document.getElementById('inviteList');
+  if(lst) lst.innerHTML = inviteCandidatesHtml(meetupId, sv); else openInviteModal(meetupId);
 }
 function acceptInvite(meetupId){
   const me = currentMember();
