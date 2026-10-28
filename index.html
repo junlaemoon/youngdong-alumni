@@ -307,11 +307,11 @@ main#app{padding:16px 16px 4px;}
   .rt-content .entry-table{min-width:0; width:100%; display:block; table-layout:auto;}
   .entry-table colgroup,.entry-table thead{display:none;}
   .entry-table tbody{display:block;}
-  .rt-content .entry-table tr{display:grid; grid-template-columns:1fr auto auto; grid-template-areas:"co co acts" "cat who acts" "svc svc svc" "addr addr addr"; column-gap:8px; row-gap:3px; border:1px solid var(--line); border-radius:12px; padding:10px 12px; margin:0 0 8px; background:#fff;}
+  .rt-content .entry-table tr{display:grid; grid-template-columns:1fr auto auto; grid-template-areas:"co co acts" "who who acts" "svc svc svc" "addr addr addr"; column-gap:8px; row-gap:3px; border:1px solid var(--line); border-radius:12px; padding:10px 12px; margin:0 0 8px; background:#fff;}
   .rt-content .entry-table td{display:block; border:none; padding:0; min-width:0; font-size:13px; word-break:keep-all; overflow-wrap:anywhere;}
   .rt-content .entry-table td.ec-co{grid-area:co; font-weight:800; font-size:14.5px; color:var(--ink);}
   .rt-content .entry-table td.ec-cat{grid-area:cat; justify-self:start; font-size:11.5px; color:var(--ink-soft);}
-  .rt-content .entry-table td.ec-who{grid-area:who; justify-self:end; font-size:12px; color:var(--ink-soft);}
+  .rt-content .entry-table td.ec-who{grid-area:who; justify-self:start; font-size:12px; color:var(--ink-soft);}
   .rt-content .entry-table td.ec-svc{grid-area:svc; margin-top:2px;}
   .rt-content .entry-table td.ec-addr{grid-area:addr; font-size:12.5px;}
   .rt-content .entry-table td.ec-acts{grid-area:acts; align-self:start;}
@@ -330,7 +330,7 @@ main#app{padding:16px 16px 4px;}
 .line-ctl{font-size:12px; color:#4B5563; margin:2px 0 4px; display:flex; flex-wrap:wrap; gap:10px; align-items:center;}
 .col-hint{font-size:11.5px; color:#6B7280; margin:2px 0 4px;}
 .col-hint a{color:#1D4ED8; cursor:pointer; text-decoration:underline;}
-.entry-acts{display:flex; flex-direction:row; flex-wrap:nowrap; gap:3px; align-items:center; justify-content:flex-end;}
+.entry-acts{display:flex; flex-direction:row; flex-wrap:wrap; row-gap:3px; gap:3px; align-items:center; justify-content:flex-end;}
 .entry-acts .btn{padding:3px 5px; font-size:11px; white-space:nowrap; flex:0 0 auto; border-radius:7px; line-height:1.2;}
 </style>
 </head>
@@ -642,7 +642,7 @@ async function init(){
   try{
     db.collection('meta').doc('entryCols').onSnapshot(d => {
       const c = d.exists ? d.data().cols : null;
-      state.entryCols = (Array.isArray(c) && c.length === 5 && c.every(x => typeof x === 'number' && x > 0)) ? c : null;
+      state.entryCols = normEntryCols(c);
       const ln = d.exists ? d.data().lines : null;
       state.entryLines = (ln && typeof ln === 'object') ? ln : null;
       if(state.loaded && !entryColDragging){ document.querySelectorAll('.entries-box[data-nid]').forEach(b => renderEntryBoxes(b.getAttribute('data-nid'))); }
@@ -2927,7 +2927,10 @@ function groupOf(e){
   if(e.group && ENTRY_GROUPS.includes(e.group)) return e.group;
   const c = normalizeEntryCategory(e.category);
   if(c in GROUP_BY_CAT) return ENTRY_GROUPS[GROUP_BY_CAT[c]];
-  const t = ((e.category||'') + ' ' + (e.service||'') + ' ' + (e.company||'')).replace(/\s+/g,'');
+  return guessGroupFromText((e.category||'') + ' ' + (e.service||'') + ' ' + (e.company||''));
+}
+function guessGroupFromText(txt){
+  const t = String(txt || '').replace(/\s+/g,'');
   if(/의료|병원|의원|치과|약국|한의|검진|의학|법률|변호|세무|회계|법무|노무|건축사|변리/.test(t)) return ENTRY_GROUPS[1];
   if(/제조|유통|무역|소프트|건설|금융|보험|물류|전자|반도체|부동산|IT|시스템|엔지니어/i.test(t)) return ENTRY_GROUPS[2];
   if(/식당|카페|맛집|냉면|만두|국밥|삼계탕|한식|중식|일식|양식|고기|휴대폰|대리점|판매|정비|보석|금은|미용|학원|세탁|편의점|꽃|안경|매장|가게|주점|호프|치킨|빵/.test(t)) return ENTRY_GROUPS[0];
@@ -3015,7 +3018,14 @@ const ENTRY_GROUP_INFO = {
   '기업·법인': { icon:'🏢', desc:'제조·유통·IT·건설 등 동문이 운영하는 회사예요. 협력·거래·제휴가 필요할 때 연락해 보세요.' },
   '미분류': { icon:'📂', desc:'분야를 확인 중인 업체예요. 관리자가 곧 정리해요.' },
 };
-const ENTRY_COLS_DEFAULT = [9, 16, 40, 13, 22];
+const ENTRY_COLS_DEFAULT = [18, 43, 14, 25];
+// 예전에 저장된 5칸(업종 포함) 너비는 업종 칸을 빼고 합이 100이 되게 환산
+function normEntryCols(c){
+  if(!Array.isArray(c) || !c.every(x => typeof x === 'number' && x > 0)) return null;
+  if(c.length === 4) return c;
+  if(c.length === 5){ const r = c.slice(1), sum = r.reduce((a,b) => a + b, 0); return r.map(x => Math.round(x / sum * 1000) / 10); }
+  return null;
+}
 function entryLinesOf(kind){ const n = Number((state.entryLines || {})[kind]); return (n >= 1 && n <= 6) ? n : 2; }
 function setEntryLines(kind, n){
   n = Math.max(1, Math.min(6, Number(n) || 2));
@@ -3023,27 +3033,27 @@ function setEntryLines(kind, n){
   db.collection('meta').doc('entryCols').set({ lines: state.entryLines }, { merge: true }).catch(() => showToast('저장 실패, 다시 시도해주세요'));
   document.querySelectorAll('.entries-box[data-nid]').forEach(b => renderEntryBoxes(b.getAttribute('data-nid')));
 }
-function entryColsNow(){ const c = state.entryCols; return (c && c.length === 5) ? c : ENTRY_COLS_DEFAULT; }
+function entryColsNow(){ const c = normEntryCols(state.entryCols); return c || ENTRY_COLS_DEFAULT; }
 let entryColDragging = false;
 function entryTableHtml(list, nid, g, canAct){
   const hasActs = list.some(canAct);
   const scale = hasActs ? 0.89 : 1;
   const w = entryColsNow().map(x => (x * scale).toFixed(2) + '%');
   const adm = isAdmin();
-  const heads = ['업종','상호명','주요서비스','기수·성함','주소 (클릭시 지도링크)'];
-  const th = heads.map((h, i) => `<th>${h}${adm && i < 4 ? `<span class="col-rs" data-i="${i}" onpointerdown="entryColDrag(event)" title="드래그해서 칸 너비 조정"></span>` : ''}</th>`).join('');
+  const heads = ['상호명','주요서비스','기수·성함','주소 (클릭시 지도링크)'];
+  const th = heads.map((h, i) => `<th>${h}${adm && i < 3 ? `<span class="col-rs" data-i="${i}" onpointerdown="entryColDrag(event)" title="드래그해서 칸 너비 조정"></span>` : ''}</th>`).join('');
   const lsel = (kind, label) => `<label style="white-space:nowrap;">${label} <select onchange="setEntryLines('${kind}', this.value)" style="width:auto; padding:1px 4px; font-size:12px;">${[1,2,3,4,5,6].map(n => `<option value="${n}" ${entryLinesOf(kind) === n ? 'selected' : ''}>${n}줄</option>`).join('')}</select></label>`;
   return (adm ? `<div class="line-ctl">보이는 줄 수 (넘치면 더보기) · ${lsel('svc','주요서비스')} ${lsel('addr','주소')}</div>` : '') + (adm ? `<div class="col-hint">↔ 제목줄의 칸 경계를 좌우로 끌어서 칸 너비를 조정하세요 (모든 회원 화면에 적용) · <a onclick="resetEntryCols()">처음 크기로</a></div>` : '') + `<div class="rt-wrap"><div class="rt-content"><table class="entry-table">
       <colgroup>${w.map(x => `<col style="width:${x}">`).join('')}${hasActs ? '<col style="width:11%">' : ''}</colgroup>
       <thead><tr>${th}${hasActs ? '<th></th>' : ''}</tr></thead>
-      <tbody>${list.map(e => `<tr><td class="ec-cat">${esc((e.category||'').trim() || '미분류')}</td><td class="ec-co">${entryCoCell(e)}</td><td class="ec-svc">${entryClamp(e.service)}</td><td class="ec-who">${entryWho(e)}</td><td class="ec-addr">${entryAddrCell(e)}</td>${hasActs ? `<td class="ec-acts">${canAct(e) ? `<div class="entry-acts"><button class="btn btn-ghost" onclick="openEntryEditModal('${e.id}','${nid}')">수정</button><button class="btn btn-ghost" onclick="deleteEntry('${e.id}','${nid}')">삭제</button></div>` : ''}</td>` : ''}</tr>`).join('')}</tbody>
+      <tbody>${list.map(e => `<tr><td class="ec-co">${entryCoCell(e)}</td><td class="ec-svc">${entryClamp(e.service)}</td><td class="ec-who">${entryWho(e)}</td><td class="ec-addr">${entryAddrCell(e)}</td>${hasActs ? `<td class="ec-acts">${canAct(e) ? `<div class="entry-acts"><button class="btn btn-ghost" onclick="openEntryEditModal('${e.id}','${nid}')">수정</button><button class="btn btn-ghost" onclick="deleteEntry('${e.id}','${nid}')">삭제</button>${adm ? `<button class="btn btn-ghost" onclick="openEntryMoveModal('${e.id}','${nid}')" title="다른 분야 탭으로 옮기기">이동</button>` : ''}</div>` : ''}</td>` : ''}</tr>`).join('')}</tbody>
     </table></div></div>`;
 }
 function entryColDrag(ev){
   ev.preventDefault(); ev.stopPropagation();
   const h = ev.currentTarget, i = +h.getAttribute('data-i');
   const table = h.closest('table'); const tw = table.getBoundingClientRect().width;
-  const hasActs = table.querySelectorAll('thead th').length > 5;
+  const hasActs = table.querySelectorAll('thead th').length > 4;
   const scale = hasActs ? 0.89 : 1;
   const start = entryColsNow().slice(); const x0 = ev.clientX;
   const MIN = 5;
@@ -3052,7 +3062,7 @@ function entryColDrag(ev){
   try{ h.setPointerCapture(ev.pointerId); }catch(e){}
   const apply = () => {
     document.querySelectorAll('.entry-table').forEach(t => {
-      const hs = t.querySelectorAll('thead th').length > 5 ? 0.89 : 1;
+      const hs = t.querySelectorAll('thead th').length > 4 ? 0.89 : 1;
       const cols = t.querySelectorAll('col');
       cur.forEach((v, k) => { if(cols[k]) cols[k].style.width = (v * hs).toFixed(2) + '%'; });
     });
@@ -3356,6 +3366,7 @@ function addEntry(nid){
   if(mapUrl && !safeMapUrl(mapUrl)){ showToast('지도 링크는 네이버·카카오·구글 지도 주소만 쓸 수 있어요'); return; }
   if(company.length > 25 || service.length > 50 || address.length > 50){ showToast('글자 수를 줄여주세요 (상호 25 · 서비스 50 · 주소 50자)'); return; }
   if(!company){ showToast('상호명은 꼭 입력해주세요'); return; }
+  if(!entryMismatchOk(service, company, entryCatValue(), window._entryGroup)) return;
   if(!isAdmin() && myEntryCount(nid) >= entryLimit()){ showToast(`업체 등록은 1인당 최대 ${entryLimit()}개까지예요`); closeModal(); return; }
   const id = uid();
   let nm = me.name, bt = me.batch ? batchNumber(me.batch) : '', byAdmin = false;
@@ -3403,6 +3414,7 @@ function saveEntryEdit(id, nid){
   const sp = splitAddr(v('enAddress')); const address = sp.address;
   if(!company){ showToast('상호명은 꼭 입력해주세요'); return; }
   if(!adm && (company.length > 25 || service.length > 50 || address.length > 50)){ showToast('글자 수를 줄여주세요 (상호 25 · 서비스 50 · 주소 50자)'); return; }
+  if(!adm && !entryMismatchOk(service, company, entryCatValue(), groupOf(e))) return;
   let mapUrl = e.mapUrl || '';
   if(adm){ mapUrl = v('enMap') || sp.url; if(mapUrl && !safeMapUrl(mapUrl)){ showToast('지도 링크는 네이버·카카오·구글 지도 주소만 쓸 수 있어요'); return; } }
   else if(address !== e.address) mapUrl = '';
@@ -3410,6 +3422,71 @@ function saveEntryEdit(id, nid){
   if(adm){ upd.name = v('enName') || e.name; upd.batch = Number(v('enBatch')) || ''; upd.group = (document.getElementById('enGroup') || {}).value || ''; }
   db.collection('noticeEntries').doc(id).update(upd).then(() => showToast('수정했어요')).catch(() => showToast('수정 실패, 다시 시도해주세요'));
   logActivity('등록 명단 수정', company);
+  closeModal();
+}
+// 등록 시: 주요서비스 글자로 짐작한 분야와 고른 업종·분야가 다르면 안내 (확실히 판정할 수 없어 '막지는 않고' 한 번 더 확인)
+function entryMismatchOk(service, company, cat, group){
+  const guess = guessGroupFromText(service);
+  if(!guess) return true;
+  const chosen = cat ? groupOf({ category: cat, group: '' }) : (group || '');
+  if(!chosen || chosen === guess) return true;
+  return confirm(`주요서비스와 선택한 업종이 일치하지 않는 것 같아요.\n\n· 주요서비스로 보면: ${GL(guess)}\n· 선택한 업종: ${cat || '(미선택)'} (${GL(chosen)})\n\n맞게 골랐다면 [확인], 업종을 다시 고르려면 [취소]를 눌러주세요.\n(맞지 않으면 관리자가 알맞은 탭으로 옮기고 쪽지로 알려드려요)`);
+}
+// 관리자: 다른 분야·업종 탭으로 옮기기 (+ 등록자에게 쪽지)
+function openEntryMoveModal(id, nid){
+  if(!isAdmin()) return;
+  const e = (entryStore[nid] || []).find(x => x.id === id); if(!e) return;
+  const g = groupOf(e);
+  const guess = guessGroupFromText(e.service);
+  const owner = entryMember(e) || state.members.find(m => m.id === e.memberId && !e.byAdmin);
+  const me = currentMember();
+  const canMsg = !!owner && owner.id !== me.id;
+  window._mv = { id, nid };
+  openModal('다른 탭으로 옮기기', `
+    <div class="card" style="background:#F7F8FA; font-size:13px;"><b>${esc(e.company)}</b><br>주요서비스: ${esc(e.service || '(없음)')}<br>지금 위치: ${esc(g ? GL(g) : '미분류')} › ${esc((e.category || '').trim() || '미분류')}${guess ? `<br><span style="color:var(--accent-dark,#B7791F);">주요서비스로 보면 <b>${esc(GL(guess))}</b> 분야로 보여요</span>` : ''}</div>
+    <div class="field"><label>옮길 분야(탭)</label><select id="mvGroup" onchange="entryMoveGroupChange(this.value)">${ENTRY_GROUPS.map(x => `<option value="${x}" ${x === (guess || g) ? 'selected' : ''}>${esc(GL(x))}</option>`).join('')}</select></div>
+    <div class="field"><label>업종</label><select id="mvCat">${entryMoveCatOptions(nid, guess || g || ENTRY_GROUPS[0], (guess && guess !== g) ? '' : (e.category || '').trim())}</select></div>
+    ${canMsg ? `<div class="field"><label>등록자(${esc(owner.name)})에게 보낼 쪽지</label><textarea id="mvMsg" rows="4" maxlength="500">${esc('[' + e.company + '] 등록 건이 주요서비스와 일치하는 탭으로 이동되었습니다.\n(이동 위치: ○○)')}</textarea><label style="display:flex; gap:6px; align-items:center; margin-top:6px; font-size:13px;"><input type="checkbox" id="mvSend" checked style="width:auto;"> 쪽지 보내기</label></div>` : `<p class="helper">${owner ? '내가 등록한 글이라 쪽지는 보내지 않아요.' : '등록자가 가입 회원으로 확인되지 않아 쪽지는 보내지 않아요.'}</p>`}
+    <button class="btn btn-accent btn-block" onclick="saveEntryMove()">옮기기</button>`);
+  entryMoveMsgFill();
+}
+function entryMoveCatOptions(nid, group, cur){
+  const list = entryCatList(nid, group);
+  const opts = list.slice(); if(cur && !opts.includes(cur)) opts.unshift(cur);
+  return `<option value="" ${cur ? '' : 'selected'}>(업종 선택 안 함)</option>` + opts.map(c => `<option value="${esc(c)}" ${c === cur ? 'selected' : ''}>${esc(c)}</option>`).join('');
+}
+function entryMoveGroupChange(g){
+  const mv = window._mv; if(!mv) return;
+  const sel = document.getElementById('mvCat'); if(sel) sel.innerHTML = entryMoveCatOptions(mv.nid, g, '');
+  entryMoveMsgFill();
+}
+function entryMoveMsgFill(){
+  const ta = document.getElementById('mvMsg'); const mv = window._mv; if(!ta || !mv) return;
+  const e = (entryStore[mv.nid] || []).find(x => x.id === mv.id); if(!e) return;
+  const g = (document.getElementById('mvGroup') || {}).value || '';
+  if(ta.dataset.edited) return;
+  ta.value = `[${e.company}] 등록 건이 주요서비스와 일치하는 '${GL(g)}' 탭으로 이동되었습니다.`;
+  ta.oninput = () => { ta.dataset.edited = '1'; };
+}
+function saveEntryMove(){
+  const mv = window._mv; if(!mv || !isAdmin()) return;
+  const e = (entryStore[mv.nid] || []).find(x => x.id === mv.id); if(!e) return;
+  const g = (document.getElementById('mvGroup') || {}).value;
+  const cat = (document.getElementById('mvCat') || {}).value || '';
+  if(!ENTRY_GROUPS.includes(g)){ showToast('옮길 분야를 골라주세요'); return; }
+  const me = currentMember();
+  const owner = entryMember(e) || state.members.find(m => m.id === e.memberId && !e.byAdmin);
+  const send = !!owner && owner.id !== me.id && (document.getElementById('mvSend') || {}).checked;
+  const text = ((document.getElementById('mvMsg') || {}).value || '').trim();
+  if(send && !text){ showToast('쪽지 내용을 입력해주세요'); return; }
+  db.collection('noticeEntries').doc(e.id).update({ group: g, category: cat, movedAt: Date.now() }).then(() => {
+    showToast('옮겼어요' + (send ? ' · 쪽지도 보냈어요' : ''));
+    if(send){
+      const mid = uid();
+      db.collection('messages').doc(mid).set({ id: mid, fromId: me.id, toId: owner.id, text: text.slice(0, MSG_MAX), createdAt: Date.now(), readAt: null }).catch(() => showToast('쪽지 전송은 실패했어요'));
+    }
+  }).catch(() => showToast('이동 실패, 다시 시도해주세요'));
+  logActivity('업체 분류 이동', `${e.company} → ${g}/${cat}`);
   closeModal();
 }
 function deleteEntry(id, nid){
