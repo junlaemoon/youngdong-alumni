@@ -323,6 +323,7 @@ main#app{padding:16px 16px 4px;}
 .ecard-thumb{width:34px; height:24px; object-fit:cover; border:1px solid #CBD5E1; border-radius:4px; cursor:zoom-in; flex:none; background:#fff;}
 .ec-co-wrap{display:flex; align-items:center; gap:6px; min-width:0;}
 .ec-co-wrap > span{min-width:0;}
+.ec-link{color:#1D4ED8; text-decoration:underline; font-weight:700;}
 .ewho-link{color:#1D4ED8; text-decoration:underline; cursor:pointer;}
 .entry-table th{position:relative;}
 .col-rs{position:absolute; top:0; right:-5px; width:12px; height:100%; cursor:col-resize; touch-action:none; z-index:2;}
@@ -2862,6 +2863,13 @@ function startEntriesListeners(){
 }
 const ENTRY_MORE_AT = 20;
 const MAP_HOST_RE = /^(https?:\/\/)([\w-]+\.)*(naver\.com|naver\.me|kakao\.com|kko\.to|kko\.kakao\.com|goo\.gl|google\.com|google\.co\.kr|maps\.app\.goo\.gl)(\/|\?|$)/i;
+// 홈페이지·SNS 링크: http(s)만 허용, 스킴이 없으면 https:// 를 붙임. 잘못된 값이면 ''
+function safeWebUrl(u){
+  u = String(u || '').trim(); if(!u || /\s/.test(u) || u.length > 300) return '';
+  if(!/^[a-z][a-z0-9+.-]*:/i.test(u)) u = 'https://' + u.replace(/^\/+/, '');
+  if(!/^https?:\/\//i.test(u)) return '';
+  try{ const x = new URL(u); return x.hostname.includes('.') ? x.href : ''; }catch(e){ return ''; }
+}
 function safeMapUrl(u){ u = String(u||'').trim(); return MAP_HOST_RE.test(u) ? u : ''; }
 // 주소 칸에 링크를 같이 붙여넣어도 글자와 링크를 자동 분리
 function splitAddr(text){
@@ -3308,7 +3316,7 @@ function entryCardFieldHtml(e){
 }
 function entryCoCell(e){
   const t = e.thumb ? `<img class="ecard-thumb" src="${e.thumb}" alt="명함" title="눌러서 명함 크게 보기" onclick="openEntryCard('${e.id}')">` : '';
-  return `<span class="ec-co-wrap">${t}<span class="clamp2" style="--cl:${entryLinesOf('svc')}"><span>${esc(e.company)}</span><a class="clamp-more" style="display:none;" onclick="toggleClamp(this)">더보기</a></span></span>`;
+  return `<span class="ec-co-wrap">${t}<span class="clamp2" style="--cl:${entryLinesOf('svc')}"><span>${(() => { const w = safeWebUrl(e.homepage); return w ? `<a href="${esc(w)}" target="_blank" rel="noopener noreferrer" class="ec-link" title="홈페이지·SNS로 이동">${esc(e.company)}</a>` : esc(e.company); })()}</span><a class="clamp-more" style="display:none;" onclick="toggleClamp(this)">더보기</a></span></span>`;
 }
 async function openEntryCard(id){
   if(!requireLogin()) return;
@@ -3352,6 +3360,7 @@ function openEntryModal(nid, group){
     ${window._entryGroup ? `<div class="card" style="background:#EEF4FF; font-size:13px;">등록 분야: <b>${esc(GL(window._entryGroup))}</b></div>` : ''}
     ${entryCatFieldHtml(nid, '', window._entryGroup)}
     <div class="field"><label>상호명 *</label><input id="enCompany" placeholder="예: 영동식당" maxlength="25"></div>
+    <div class="field"><label>홈페이지·SNS 링크 <span class="helper">(선택 · 넣으면 상호명을 눌러 이동해요 · 예: instagram.com/영동식당)</span></label><input id="enHome" placeholder="예: https://blog.naver.com/..." maxlength="300"></div>
     <div class="field"><label>주요서비스 <span class="helper">(선택 · 50자 이내)</span></label><input id="enService" placeholder="예: 한식 · 단체예약 (50자 이내)" maxlength="50"></div>
     <div class="field"><label>주소 <span class="helper">(선택 · 쓰면 이 글자를 눌러 네이버 지도로 자동 연결돼요)</span></label><input id="enAddress" placeholder="예: 서울 강남구 OO로 12 / 강남구청역 행당점 (50자 이내)" maxlength="250"></div>
     ${isAdmin() ? `<div class="field"><label>지도 링크 직접 지정 <span class="helper">(관리자 전용·선택 — 비우면 자동)</span></label><input id="enMap" placeholder="자동 연결이 엉뚱한 곳일 때만 네이버 지도 공유 링크 입력" maxlength="300"></div>` : ''}
@@ -3368,6 +3377,8 @@ function addEntry(nid){
   if(mapUrl && !safeMapUrl(mapUrl)){ showToast('지도 링크는 네이버·카카오·구글 지도 주소만 쓸 수 있어요'); return; }
   if(company.length > 25 || service.length > 50 || address.length > 50){ showToast('글자 수를 줄여주세요 (상호 25 · 서비스 50 · 주소 50자)'); return; }
   if(!company){ showToast('상호명은 꼭 입력해주세요'); return; }
+  const homeRaw = v('enHome'); const homepage = safeWebUrl(homeRaw);
+  if(homeRaw && !homepage){ showToast('홈페이지·SNS 링크 형식을 확인해주세요 (예: https://instagram.com/...)'); return; }
   if(!entryMismatchOk(service, company, entryCatValue(), window._entryGroup)) return;
   if(!isAdmin() && myEntryCount(nid) >= entryLimit()){ showToast(`업체 등록은 1인당 최대 ${entryLimit()}개까지예요`); closeModal(); return; }
   const id = uid();
@@ -3378,7 +3389,7 @@ function addEntry(nid){
   }
   const cardUpd = saveEntryCard(id, nid, window._enCard === null ? undefined : window._enCard);
   db.collection('noticeEntries').doc(id).set(Object.assign({
-    id, noticeId: nid, category: entryCatValue(), company, service, address,
+    id, noticeId: nid, category: entryCatValue(), company, service, address, homepage,
     memberId: me.id, name: nm, batch: bt, byAdmin, mapUrl: mapUrl || '', group: window._entryGroup || '', createdAt: Date.now(),
   }, cardUpd)).then(() => { showToast('등록했어요'); }).catch(() => showToast('등록 실패, 다시 시도해주세요'));
   logActivity('업체 직접 등록', company);
@@ -3400,6 +3411,7 @@ function openEntryEditModal(id, nid){
     ${entryCatFieldHtml(nid, e.category, groupOf(e))}
     ${adm ? `<div class="field"><label>대분류 <span class="helper">(관리자 전용 — 자동 판정이 틀릴 때만 지정, 현재 자동: ${esc(groupOf(Object.assign({}, e, {group:''})) || '판정 불가')})</span></label><select id="enGroup"><option value="">(자동)</option>${ENTRY_GROUPS.map(g => `<option value="${g}" ${e.group === g ? 'selected' : ''}>${esc(GL(g))}</option>`).join('')}</select></div>` : ''}
     <div class="field"><label>상호명 *</label><input id="enCompany" maxlength="${adm ? 100 : 25}" value="${val(e.company)}"></div>
+    <div class="field"><label>홈페이지·SNS 링크 <span class="helper">(선택 · 상호명을 누르면 이동해요)</span></label><input id="enHome" maxlength="300" value="${val(e.homepage)}"></div>
     <div class="field"><label>주요서비스 <span class="helper">(${adm ? '' : '50자 이내'})</span></label><input id="enService" maxlength="${adm ? 200 : 50}" value="${val(e.service)}"></div>
     <div class="field"><label>주소 <span class="helper">(선택 · 쓰면 이 글자를 눌러 네이버 지도로 자동 연결돼요)</span></label><input id="enAddress" maxlength="${adm ? 250 : 250}" value="${val(e.address)}"></div>
     ${adm ? `<div class="field"><label>지도 링크 직접 지정 <span class="helper">(관리자 전용·선택 — 비우면 자동)</span></label><input id="enMap" maxlength="300" value="${val(e.mapUrl)}"></div>` : ''}
@@ -3416,11 +3428,13 @@ function saveEntryEdit(id, nid){
   const sp = splitAddr(v('enAddress')); const address = sp.address;
   if(!company){ showToast('상호명은 꼭 입력해주세요'); return; }
   if(!adm && (company.length > 25 || service.length > 50 || address.length > 50)){ showToast('글자 수를 줄여주세요 (상호 25 · 서비스 50 · 주소 50자)'); return; }
+  const homeRaw = v('enHome'); const homepage = safeWebUrl(homeRaw);
+  if(homeRaw && !homepage){ showToast('홈페이지·SNS 링크 형식을 확인해주세요 (예: https://instagram.com/...)'); return; }
   if(!adm && !entryMismatchOk(service, company, entryCatValue(), groupOf(e))) return;
   let mapUrl = e.mapUrl || '';
   if(adm){ mapUrl = v('enMap') || sp.url; if(mapUrl && !safeMapUrl(mapUrl)){ showToast('지도 링크는 네이버·카카오·구글 지도 주소만 쓸 수 있어요'); return; } }
   else if(address !== e.address) mapUrl = '';
-  const upd = Object.assign({ category: entryCatValue(), company, service, address, mapUrl: mapUrl || '', editedAt: Date.now() }, saveEntryCard(id, nid, window._enCard));
+  const upd = Object.assign({ category: entryCatValue(), company, service, address, homepage, mapUrl: mapUrl || '', editedAt: Date.now() }, saveEntryCard(id, nid, window._enCard));
   if(adm){ upd.name = v('enName') || e.name; upd.batch = Number(v('enBatch')) || ''; upd.group = (document.getElementById('enGroup') || {}).value || ''; }
   db.collection('noticeEntries').doc(id).update(upd).then(() => showToast('수정했어요')).catch(() => showToast('수정 실패, 다시 시도해주세요'));
   logActivity('등록 명단 수정', company);
@@ -3511,7 +3525,7 @@ function deleteEntry(id, nid){
 function exportEntries(nid){
   if(!isAdmin()) return;
   const n = state.notices.find(x => x.id === nid);
-  const rows = (entryStore[nid] || []).map((e,i) => ({ 'No.': i+1, '대분류': groupOf(e), '업종': e.category||'', '상호명': e.company, '주요서비스': e.service, '기수': e.batch||'', '성함': e.name, '주소': e.address, '지도링크': e.mapUrl||'', '등록일시': new Date(e.createdAt).toLocaleString('ko-KR') }));
+  const rows = (entryStore[nid] || []).map((e,i) => ({ 'No.': i+1, '대분류': groupOf(e), '업종': e.category||'', '상호명': e.company, '홈페이지·SNS': e.homepage||'', '주요서비스': e.service, '기수': e.batch||'', '성함': e.name, '주소': e.address, '지도링크': e.mapUrl||'', '등록일시': new Date(e.createdAt).toLocaleString('ko-KR') }));
   const ws = XLSX.utils.json_to_sheet(rows); const wb = XLSX.utils.book_new(); XLSX.utils.book_append_sheet(wb, ws, '등록명단');
   XLSX.writeFile(wb, `${n ? n.title : '공지'}_회원등록명단.xlsx`);
 }
