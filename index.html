@@ -297,6 +297,8 @@ main#app{padding:16px 16px 4px;}
 /* 업체 명단 표: 칸은 줄이고 주요서비스 칸을 넓게 */
 .entry-table{table-layout:fixed; width:100%; min-width:560px;}
 .entry-table td,.entry-table th{word-break:keep-all; overflow-wrap:anywhere; font-size:12.5px; padding:6px 6px; line-height:1.45;}
+.ec-co-wrap > .clamp2{flex:1 1 auto;}
+.entry-more{padding:2px 9px; font-size:15px; line-height:1; font-weight:800;}
 .clamp2{position:relative; line-height:1.45; max-height:calc(1.45em * var(--cl, 2)); overflow:hidden;}
 .clamp2.open{max-height:none;}
 .clamp2 .clamp-more{position:absolute; right:0; bottom:0; padding-left:22px; background:linear-gradient(90deg, rgba(255,255,255,0), #fff 45%); color:#6B7280; cursor:pointer; font-size:11.5px; white-space:nowrap;}
@@ -2899,7 +2901,7 @@ function entryWho(e){
   const nameHtml = mem
     ? `<a class="ewho-link" onclick="openMemberProfileModal('${mem.id}')" title="누르면 쪽지·연락처 요청">${esc(nm)}</a>`
     : esc(nm);
-  return (e.batch ? `<span style="white-space:nowrap;">${esc(e.batch)}회</span> ` : '') + `<span style="white-space:nowrap;">${nameHtml}</span>`;
+  return `<div class="clamp2" style="--cl:${entryLinesOf('svc')}">` + (e.batch ? `<span style="white-space:nowrap;">${esc(e.batch)}회</span> ` : '') + `<span>${nameHtml}</span><a class="clamp-more" style="display:none;" onclick="toggleClamp(this)">더보기</a></div>`;
 }
 // 주요서비스: 2줄까지만 보이고, 넘치면 2째 줄 끝에 '더보기'
 function entryClamp(text){
@@ -3018,7 +3020,7 @@ const ENTRY_GROUP_INFO = {
   '기업·법인': { icon:'🏢', desc:'제조·유통·IT·건설 등 동문이 운영하는 회사예요. 협력·거래·제휴가 필요할 때 연락해 보세요.' },
   '미분류': { icon:'📂', desc:'분야를 확인 중인 업체예요. 관리자가 곧 정리해요.' },
 };
-const ENTRY_COLS_DEFAULT = [18, 43, 14, 25];
+const ENTRY_COLS_DEFAULT = [17, 34, 20, 29];
 // 예전에 저장된 5칸(업종 포함) 너비는 업종 칸을 빼고 합이 100이 되게 환산
 function normEntryCols(c){
   if(!Array.isArray(c) || !c.every(x => typeof x === 'number' && x > 0)) return null;
@@ -3026,7 +3028,7 @@ function normEntryCols(c){
   if(c.length === 5){ const r = c.slice(1), sum = r.reduce((a,b) => a + b, 0); return r.map(x => Math.round(x / sum * 1000) / 10); }
   return null;
 }
-function entryLinesOf(kind){ const n = Number((state.entryLines || {})[kind]); return (n >= 1 && n <= 6) ? n : 2; }
+function entryLinesOf(kind){ const n = Number((state.entryLines || {})[kind]); return (n >= 1 && n <= 6) ? n : 1; }
 function setEntryLines(kind, n){
   n = Math.max(1, Math.min(6, Number(n) || 2));
   state.entryLines = Object.assign({}, state.entryLines || {}, { [kind]: n });
@@ -3037,16 +3039,16 @@ function entryColsNow(){ const c = normEntryCols(state.entryCols); return c || E
 let entryColDragging = false;
 function entryTableHtml(list, nid, g, canAct){
   const hasActs = list.some(canAct);
-  const scale = hasActs ? 0.89 : 1;
+  const scale = hasActs ? 0.94 : 1;
   const w = entryColsNow().map(x => (x * scale).toFixed(2) + '%');
   const adm = isAdmin();
   const heads = ['상호명','주요서비스','기수·성함','주소 (클릭시 지도링크)'];
   const th = heads.map((h, i) => `<th>${h}${adm && i < 3 ? `<span class="col-rs" data-i="${i}" onpointerdown="entryColDrag(event)" title="드래그해서 칸 너비 조정"></span>` : ''}</th>`).join('');
   const lsel = (kind, label) => `<label style="white-space:nowrap;">${label} <select onchange="setEntryLines('${kind}', this.value)" style="width:auto; padding:1px 4px; font-size:12px;">${[1,2,3,4,5,6].map(n => `<option value="${n}" ${entryLinesOf(kind) === n ? 'selected' : ''}>${n}줄</option>`).join('')}</select></label>`;
   return (adm ? `<div class="line-ctl">보이는 줄 수 (넘치면 더보기) · ${lsel('svc','주요서비스')} ${lsel('addr','주소')}</div>` : '') + (adm ? `<div class="col-hint">↔ 제목줄의 칸 경계를 좌우로 끌어서 칸 너비를 조정하세요 (모든 회원 화면에 적용) · <a onclick="resetEntryCols()">처음 크기로</a></div>` : '') + `<div class="rt-wrap"><div class="rt-content"><table class="entry-table">
-      <colgroup>${w.map(x => `<col style="width:${x}">`).join('')}${hasActs ? '<col style="width:11%">' : ''}</colgroup>
+      <colgroup>${w.map(x => `<col style="width:${x}">`).join('')}${hasActs ? '<col style="width:6%">' : ''}</colgroup>
       <thead><tr>${th}${hasActs ? '<th></th>' : ''}</tr></thead>
-      <tbody>${list.map(e => `<tr><td class="ec-co">${entryCoCell(e)}</td><td class="ec-svc">${entryClamp(e.service)}</td><td class="ec-who">${entryWho(e)}</td><td class="ec-addr">${entryAddrCell(e)}</td>${hasActs ? `<td class="ec-acts">${canAct(e) ? `<div class="entry-acts"><button class="btn btn-ghost" onclick="openEntryEditModal('${e.id}','${nid}')">수정</button><button class="btn btn-ghost" onclick="deleteEntry('${e.id}','${nid}')">삭제</button>${adm ? `<button class="btn btn-ghost" onclick="openEntryMoveModal('${e.id}','${nid}')" title="다른 분야 탭으로 옮기기">이동</button>` : ''}</div>` : ''}</td>` : ''}</tr>`).join('')}</tbody>
+      <tbody>${list.map(e => `<tr><td class="ec-co">${entryCoCell(e)}</td><td class="ec-svc">${entryClamp(e.service)}</td><td class="ec-who">${entryWho(e)}</td><td class="ec-addr">${entryAddrCell(e)}</td>${hasActs ? `<td class="ec-acts">${canAct(e) ? `<button class="btn btn-ghost entry-more" onclick="openEntryActions('${e.id}','${nid}')" title="수정·삭제${adm ? '·이동' : ''}">⋯</button>` : ''}</td>` : ''}</tr>`).join('')}</tbody>
     </table></div></div>`;
 }
 function entryColDrag(ev){
@@ -3054,7 +3056,7 @@ function entryColDrag(ev){
   const h = ev.currentTarget, i = +h.getAttribute('data-i');
   const table = h.closest('table'); const tw = table.getBoundingClientRect().width;
   const hasActs = table.querySelectorAll('thead th').length > 4;
-  const scale = hasActs ? 0.89 : 1;
+  const scale = hasActs ? 0.94 : 1;
   const start = entryColsNow().slice(); const x0 = ev.clientX;
   const MIN = 5;
   let cur = start.slice();
@@ -3062,7 +3064,7 @@ function entryColDrag(ev){
   try{ h.setPointerCapture(ev.pointerId); }catch(e){}
   const apply = () => {
     document.querySelectorAll('.entry-table').forEach(t => {
-      const hs = t.querySelectorAll('thead th').length > 4 ? 0.89 : 1;
+      const hs = t.querySelectorAll('thead th').length > 4 ? 0.94 : 1;
       const cols = t.querySelectorAll('col');
       cur.forEach((v, k) => { if(cols[k]) cols[k].style.width = (v * hs).toFixed(2) + '%'; });
     });
@@ -3306,7 +3308,7 @@ function entryCardFieldHtml(e){
 }
 function entryCoCell(e){
   const t = e.thumb ? `<img class="ecard-thumb" src="${e.thumb}" alt="명함" title="눌러서 명함 크게 보기" onclick="openEntryCard('${e.id}')">` : '';
-  return `<span class="ec-co-wrap">${t}<span>${esc(e.company)}</span></span>`;
+  return `<span class="ec-co-wrap">${t}<span class="clamp2" style="--cl:${entryLinesOf('svc')}"><span>${esc(e.company)}</span><a class="clamp-more" style="display:none;" onclick="toggleClamp(this)">더보기</a></span></span>`;
 }
 async function openEntryCard(id){
   if(!requireLogin()) return;
@@ -3488,6 +3490,15 @@ function saveEntryMove(){
   }).catch(() => showToast('이동 실패, 다시 시도해주세요'));
   logActivity('업체 분류 이동', `${e.company} → ${g}/${cat}`);
   closeModal();
+}
+function openEntryActions(id, nid){
+  const e = (entryStore[nid] || []).find(x => x.id === id);
+  if(!entryCanEdit(e)) return;
+  openModal(esc(e.company), `<div style="display:grid; gap:8px;">
+    <button class="btn btn-ghost btn-block" onclick="openEntryEditModal('${id}','${nid}')">✏️ 수정</button>
+    ${isAdmin() ? `<button class="btn btn-ghost btn-block" onclick="openEntryMoveModal('${id}','${nid}')">↪ 다른 탭으로 이동</button>` : ''}
+    <button class="btn btn-ghost btn-block" style="color:#B42318;" onclick="closeModal(); deleteEntry('${id}','${nid}')">🗑 삭제</button>
+  </div>`, true);
 }
 function deleteEntry(id, nid){
   const e0 = (entryStore[nid] || []).find(x => x.id === id);
