@@ -984,6 +984,10 @@ function textDefs(){
     hdrSub:     { label: '맨 위 한 줄 소개', def: '8학군의 중심, 대한민국의 미래, 글로벌 리더' },
     entTitle:   { label: '업체 명단 제목', def: '회원 직접 등록 명단' },
     entHelp:    { label: '업체 명단 안내 문구', def: '누구나 등록할 수 있어요. 내가 올린 글(관리자가 대신 올린 글도 내 이름·기수와 같으면 포함)은 직접 수정·삭제할 수 있어요.', multi: true },
+    entHead0:   { label: '업체 표 제목줄 · 상호명 칸', def: '상호명' },
+    entHead1:   { label: '업체 표 제목줄 · 주요서비스 칸', def: '주요서비스' },
+    entHead2:   { label: '업체 표 제목줄 · 기수·성함 칸', def: '기수·성함' },
+    entHead3:   { label: '업체 표 제목줄 · 주소 칸', def: '주소 (클릭시 지도링크)' },
     entDesc0:   { label: `${ENTRY_GROUPS[0]} 박스 설명`, def: g(0), multi: true },
     entDesc1:   { label: `${ENTRY_GROUPS[1]} 박스 설명`, def: g(1), multi: true },
     entDesc2:   { label: `${ENTRY_GROUPS[2]} 박스 설명`, def: g(2), multi: true },
@@ -1041,9 +1045,15 @@ function applyHeaderTexts(){
   });
   try{ if(TX('hdrTitle')) document.title = TX('hdrTitle'); }catch(e){}
 }
+let _txBack = null;
+function txDone(){
+  const back = _txBack; _txBack = null;
+  if(back) back(); else closeModal();
+}
 function openTextEdit(key){
   if(!isAdmin()) return;
   const d = textDefs()[key]; if(!d) return;
+  _txBack = window._modalBack || null;
   const cur = TX(key);
   openModal('문구 수정', `
     <p class="helper" style="margin-top:0;">${esc(d.label)}</p>
@@ -1064,6 +1074,7 @@ function openTextManager(){
         <button class="btn btn-ghost btn-sm" onclick="openTextEdit('${k}')">✏️ 수정</button>
       </div>`; }).join('')}
   `, true);
+  window._modalBack = () => openTextManager();
 }
 function saveTextEdit(key){
   if(!isAdmin()) return;
@@ -1075,13 +1086,13 @@ function saveTextEdit(key){
   state.texts = Object.assign({}, state.texts || {}, { [key]: v });
   db.collection('meta').doc('texts').set({ [key]: v }, { merge: true }).catch(() => showToast('저장 실패, 다시 시도해주세요'));
   logActivity('문구 수정', textDefs()[key].label);
-  closeModal(); applyHeaderTexts(); renderTabs(); renderApp(); showToast('저장했어요');
+  applyHeaderTexts(); renderTabs(); renderApp(); txDone(); showToast('저장했어요');
 }
 function resetTextEdit(key){
   if(!isAdmin()) return;
   const t = Object.assign({}, state.texts || {}); delete t[key]; state.texts = t;
   db.collection('meta').doc('texts').set({ [key]: firebase.firestore.FieldValue.delete() }, { merge: true }).catch(() => showToast('저장 실패, 다시 시도해주세요'));
-  closeModal(); applyHeaderTexts(); renderTabs(); renderApp(); showToast('기본 문구로 되돌렸어요');
+  applyHeaderTexts(); renderTabs(); renderApp(); txDone(); showToast('기본 문구로 되돌렸어요');
 }
 let pendingReadersFor = null;
 function trackView(type, id){
@@ -2026,12 +2037,12 @@ function fmtTimeAgo(ts){
 let histM = false, pendingBack = false;
 function modalIsOpen(){ return !!document.getElementById('modal-root').innerHTML.trim(); }
 function closeModal(){
-  stopCommentsListener();
+  stopCommentsListener(); window._modalBack = null;
   document.getElementById('modal-root').innerHTML = '';
   if(histM && !pendingBack && history.state && history.state.m){ pendingBack = true; history.back(); }
 }
 function openModal(title, bodyHtml, closeOnBackdrop){
-  stopCommentsListener();
+  stopCommentsListener(); window._modalBack = null;
   if(!histM && !pendingBack){ try{ history.pushState({m:1}, ''); histM = true; }catch(e){} }
   document.getElementById('modal-root').innerHTML = `
     <div class="modal-backdrop" ${closeOnBackdrop ? `onclick="if(event.target===this) closeModal()"` : ''}>
@@ -3050,7 +3061,7 @@ function entryTableHtml(list, nid, g, canAct){
   const scale = hasActs ? 0.94 : 1;
   const w = entryColsNow().map(x => (x * scale).toFixed(2) + '%');
   const adm = isAdmin();
-  const heads = ['상호명','주요서비스','기수·성함','주소 (클릭시 지도링크)'];
+  const heads = [0,1,2,3].map(i => TXH('entHead' + i) + txPen('entHead' + i));
   const th = heads.map((h, i) => `<th>${h}${adm && i < 3 ? `<span class="col-rs" data-i="${i}" onpointerdown="entryColDrag(event)" title="드래그해서 칸 너비 조정"></span>` : ''}</th>`).join('');
   const lsel = (kind, label) => `<label style="white-space:nowrap;">${label} <select onchange="setEntryLines('${kind}', this.value)" style="width:auto; padding:1px 4px; font-size:12px;">${[1,2,3,4,5,6].map(n => `<option value="${n}" ${entryLinesOf(kind) === n ? 'selected' : ''}>${n}줄</option>`).join('')}</select></label>`;
   return (adm ? `<div class="line-ctl">보이는 줄 수 (넘치면 더보기) · ${lsel('svc','주요서비스')} ${lsel('addr','주소')}</div>` : '') + (adm ? `<div class="col-hint">↔ 제목줄의 칸 경계를 좌우로 끌어서 칸 너비를 조정하세요 (모든 회원 화면에 적용) · <a onclick="resetEntryCols()">처음 크기로</a></div>` : '') + `<div class="rt-wrap"><div class="rt-content"><table class="entry-table">
@@ -3804,12 +3815,14 @@ function noticeCardCompact(n, idx, withFold){
     </div>
   `;
 }
-function openNoticeDetailModal(id){
+function openNoticeDetailModal(id, noTrack){
   const n = state.notices.find(x=>x.id===id);
   if(!n) return;
-  trackView('notice', id);
+  if(!noTrack) trackView('notice', id);
   openModal('공지', noticeCardFull(n) + commentsSectionHtml('notice', id), true);
   startCommentsListener('notice', id);
+  // 이 창 위에서 문구 수정을 해도 저장 뒤 이 창으로 돌아오게
+  window._modalBack = () => openNoticeDetailModal(id, true);
 }
 function renderNoticeList(){
   const q = (state.noticeSearch||'').trim().toLowerCase();
