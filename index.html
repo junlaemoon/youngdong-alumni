@@ -1045,15 +1045,10 @@ function applyHeaderTexts(){
   });
   try{ if(TX('hdrTitle')) document.title = TX('hdrTitle'); }catch(e){}
 }
-let _txBack = null;
-function txDone(){
-  const back = _txBack; _txBack = null;
-  if(back) back(); else closeModal();
-}
+function txDone(){ closeModal(); }
 function openTextEdit(key){
   if(!isAdmin()) return;
   const d = textDefs()[key]; if(!d) return;
-  _txBack = window._modalBack || null;
   const cur = TX(key);
   openModal('문구 수정', `
     <p class="helper" style="margin-top:0;">${esc(d.label)}</p>
@@ -2036,13 +2031,24 @@ function fmtTimeAgo(ts){
 --------------------------------------------------------- */
 let histM = false, pendingBack = false;
 function modalIsOpen(){ return !!document.getElementById('modal-root').innerHTML.trim(); }
+// 상세 창 위에서 연 수정·신청 창 등을 닫으면(저장·취소) 원래 상세 창으로 돌아가게 하는 장치
+const _modalStack = []; let _restoring = false;
 function closeModal(){
+  if(_modalStack.length && !_restoring && modalIsOpen()){
+    const back = _modalStack.pop();
+    stopCommentsListener(); _restoring = true;
+    try{ back(); }catch(e){ console.error(e); } finally{ _restoring = false; }
+    if(modalIsOpen()) return;
+  }
+  _modalStack.length = 0;
   stopCommentsListener(); window._modalBack = null;
   document.getElementById('modal-root').innerHTML = '';
   if(histM && !pendingBack && history.state && history.state.m){ pendingBack = true; history.back(); }
 }
 function openModal(title, bodyHtml, closeOnBackdrop){
-  stopCommentsListener(); window._modalBack = null;
+  const _prevBack = window._modalBack; window._modalBack = null;
+  if(!_restoring){ if(!modalIsOpen()) _modalStack.length = 0; else if(_prevBack) _modalStack.push(_prevBack); }
+  stopCommentsListener();
   if(!histM && !pendingBack){ try{ history.pushState({m:1}, ''); histM = true; }catch(e){} }
   document.getElementById('modal-root').innerHTML = `
     <div class="modal-backdrop" ${closeOnBackdrop ? `onclick="if(event.target===this) closeModal()"` : ''}>
@@ -2472,9 +2478,9 @@ function addDeal(){
   showToast(needsApproval ? '등록 요청을 보냈어요. 관리자 확인 후 게시돼요.' : '공동구매를 등록했어요');
   renderAll();
 }
-function openDealDetailModal(id){
+function openDealDetailModal(id, noTrack){
   const d = state.deals.find(x => x.id === id); if(!d) return;
-  trackView('deal', id);
+  if(!noTrack) trackView('deal', id);
   const me = currentMember();
   const st = dealState(d);
   const joined = me && (d.participants||[]).some(p => p.memberId === me.id);
@@ -2524,6 +2530,7 @@ function openDealDetailModal(id){
     ${ownerBtns}
   `, true);
   if(d.status !== 'pending') startCommentsListener('deal', id);
+  window._modalBack = () => openDealDetailModal(id, true);
 }
 function dealApplyRowsHtml(p){
   const row = (k, v) => v ? `<div class="req-row" style="padding:3px 0;"><span class="req-sub" style="white-space:nowrap;">${k}</span><span class="req-name" style="font-weight:600; text-align:right; word-break:break-all;">${v}</span></div>` : '';
@@ -3712,7 +3719,7 @@ function switchTab(id){ state.tab = id; renderApp(); renderTabs(); }
     }
     if(histM){ histM = false; }
     if(modalIsOpen()){
-      stopCommentsListener(); document.getElementById('modal-root').innerHTML = '';
+      stopCommentsListener(); _modalStack.length = 0; document.getElementById('modal-root').innerHTML = '';
       if(st.base){ try{ history.pushState({app:1}, ''); }catch(err){} }
       return;
     }
@@ -3893,11 +3900,12 @@ function postCardCompact(p, idx, withFold){
     </div>
   `;
 }
-function openPostDetailModal(id){
+function openPostDetailModal(id, noTrack){
   const p = state.posts.find(x=>x.id===id);
   if(!p) return;
-  trackView('post', id);
+  if(!noTrack) trackView('post', id);
   openModal('소식', postCardFull(p), true);
+  window._modalBack = () => openPostDetailModal(id, true);
 }
 function renderFeedList(){
   const q = (state.feedSearch||'').trim().toLowerCase();
@@ -4061,12 +4069,13 @@ function meetupCardCompact(mt){
     </div>
   `;
 }
-function openMeetupDetailModal(id){
+function openMeetupDetailModal(id, noTrack){
   const mt = state.meetups.find(m => m.id === id);
   if(!mt) return;
-  trackView('meetup', id);
+  if(!noTrack) trackView('meetup', id);
   openModal('모임 상세', meetupCard(mt) + commentsSectionHtml('meetup', id), true);
   startCommentsListener('meetup', id);
+  window._modalBack = () => openMeetupDetailModal(id, true);
 }
 function visibleMeetups(){
   const me = currentMember();
