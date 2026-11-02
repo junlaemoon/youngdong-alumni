@@ -895,14 +895,25 @@ window.addEventListener('appinstalled', () => {
   }catch(e){}
 });
 // 방문 기록: 같은 기기·같은 회원은 30분에 최대 1회만 기록 (쓰기 횟수 절약)
-function logVisit(){
+// 기기 시계가 틀린 회원(예: 날짜가 미래로 설정됨)의 기록이 엉뚱한 날짜로 들어가지 않도록, 서버(GitHub Pages) 응답 시각으로 보정
+let _clockOff = 0;
+const _clockReady = (function(){
+  const sync = !/^https?:$/.test(location.protocol) ? Promise.resolve() : fetch(location.pathname + '?_c=' + Date.now(), { method: 'HEAD', cache: 'no-store' }).then(r => {
+    const h = r.headers.get('date'); const t = h ? Date.parse(h) : NaN;
+    if(!isNaN(t)) _clockOff = t - Date.now();
+  }).catch(() => {});
+  return Promise.race([sync, new Promise(res => setTimeout(res, 2500))]);
+})();
+function trueNow(){ return Date.now() + _clockOff; }
+function logVisit(){ _clockReady.then(_logVisit); }
+function _logVisit(){
   const me = currentMember();
-  const now = Date.now();
-  const today = ymd(new Date());
+  const now = trueNow();
+  const today = ymd(new Date(now));
   const key = me ? 'rc_last_visit_' + me.id : 'rc_last_visit_anon';
   let last = 0;
   try{ last = Number(localStorage.getItem(key) || 0); }catch(e){}
-  if(now - last < 30*60*1000) return;
+  if(last <= now && now - last < 30*60*1000) return;   // last가 미래(시계 오류 흔적)면 무시하고 새로 기록
   try{ localStorage.setItem(key, String(now)); }catch(e){}
   const inc = firebase.firestore.FieldValue.increment(1);
   const dailyRef = db.collection('visitDaily').doc(today);
@@ -911,7 +922,7 @@ function logVisit(){
   let devInfo = { dev: 'pc', standalone: false };
   try{
     const ua = navigator.userAgent || '';
-    const hh = String(new Date().getHours()).padStart(2, '0');
+    const hh = String(new Date(now).getHours()).padStart(2, '0');
     const dev = /Android|iPhone|iPad|iPod|Mobile/i.test(ua) ? 'mobile' : 'pc';
     const standalone = (window.matchMedia && window.matchMedia('(display-mode: standalone)').matches) || window.navigator.standalone === true;
     let ref = ''; try{ ref = new URL(document.referrer).hostname; }catch(e){}
@@ -1158,7 +1169,7 @@ function statsFetch(key, fn){
 }
 const statsDaily = () => statsFetch('daily', async () => {
   const snap = await db.collection('visitDaily').orderBy('date', 'desc').limit(120).get();
-  const map = {}; snap.docs.forEach(d => { const r = d.data(); map[r.date] = r; }); return map;
+  const todayS = ymd(new Date(trueNow())); const map = {}; snap.docs.forEach(d => { const r = d.data(); if(r.date <= todayS) map[r.date] = r; }); return map;
 });
 const statsTotals = () => statsFetch('totals', async () => {
   const snap = await db.collection('visitTotals').orderBy('count', 'desc').limit(1000).get();
@@ -1362,15 +1373,37 @@ async function loadStatsBody(tab){
       if(!body()) return;
       body().innerHTML = `
         <p class="helper">방문 횟수 상위 100명이에요. 이름을 누르면 날짜별 방문기록을 볼 수 있어요.</p>
+        ${rows.some(r => (r.lastDate || '') > ymd(new Date(trueNow()))) ? `<div class="card" style="background:#FFF4E5; font-size:13px;">⚠️ 마지막 방문이 <b>오늘보다 미래</b>인 회원이 있어요. 그 회원 기기의 날짜·시간 설정이 틀렸던 경우예요. <button class="btn btn-accent btn-sm" style="margin-top:6px;" onclick="fixFutureVisits()">미래 날짜 기록 정리</button></div>` : ''}
         ${statRow(['회원','방문','마지막 방문'], { head: true, cols: '1.6fr 0.8fr 1.1fr' })}
         ${rows.length ? rows.map(r => {
           const m = state.members.find(x => x.id === r.memberId);
           const name = m ? esc(m.name) + (m.batch ? ' · ' + esc(displayBatch(m.batch)) : '') : '(탈퇴회원)';
-          return statRow([name, (r.count||0)+'회', esc(r.lastDate || '-')], { cols: '1.6fr 0.8fr 1.1fr', onclick: `openPersonVisitsModal('${r.memberId}')` });
+          const fut = (r.lastDate || '') > ymd(new Date(trueNow()));
+          return statRow([name, (r.count||0)+'회', esc(r.lastDate || '-') + (fut ? ' ⚠️' : '')], { cols: '1.6fr 0.8fr 1.1fr', onclick: `openPersonVisitsModal('${r.memberId}')` });
         }).join('') : '<p class="helper">아직 기록이 없어요</p>'}
       `;
     }
   }catch(e){ fail(e); }
+}
+// 관리자: 기기 시계 오류로 '미래 날짜'가 찍힌 방문 기록 정리 (일별 집계·방문기록 삭제, 회원별 마지막 방문일은 오늘로 수정)
+async function fixFutureVisits(){
+  if(!isAdmin()) return;
+  if(!confirm('오늘보다 미래 날짜로 찍힌 방문 기록을 정리할까요?\n(미래 날짜의 일별 집계·방문기록은 삭제하고, 해당 회원의 마지막 방문일은 오늘로 바로잡아요)')) return;
+  const today = ymd(new Date(trueNow()));
+  try{
+    let n = 0;
+    const d1 = await db.collection('visitDaily').where('date', '>', today).get();
+    const d2 = await db.collection('visitLog').where('date', '>', today).get();
+    const d3 = await db.collection('visitTotals').where('lastDate', '>', today).get();
+    const b = db.batch();
+    d1.docs.forEach(d => { b.delete(d.ref); n++; });
+    d2.docs.forEach(d => { b.delete(d.ref); n++; });
+    d3.docs.forEach(d => { b.update(d.ref, { lastDate: today }); n++; });
+    if(n) await b.commit();
+    for(const k in statsCache) delete statsCache[k];
+    showToast(n ? `${n}건 정리했어요` : '정리할 기록이 없어요');
+    openStatsModal('people');
+  }catch(e){ console.error(e); showToast('정리 실패: ' + (e.code || '다시 시도해주세요')); }
 }
 async function openPersonVisitsModal(memberId){
   if(!isAdmin()) return;
@@ -2693,10 +2726,58 @@ function itemPlain(item){
   if(!item.rich) return item.content;
   return new DOMParser().parseFromString(item.content, 'text/html').body.textContent || '';
 }
+// 본문 속 '이름 기수'(예: 홍제선 10) 또는 '기수 이름'이 가입 회원과 정확히 일치하면 눌러서 프로필(쪽지·연락처 요청)을 열 수 있게 함. 로그인한 회원에게만.
+function memberByNameBatch(name, num){
+  const l = state.members.filter(m => normName(m.name) === name && m.batch && Number(batchNumber(m.batch)) === Number(num));
+  return l.length === 1 ? l[0] : null;
+}
+function linkMemberText(text){
+  const found = [];   // {s, e, m}
+  let r;
+  const re1 = /([가-힣]+)\s*(\d{1,3})(?!\d)/g;
+  while((r = re1.exec(text))){
+    const run = r[1];
+    for(let L = Math.min(4, run.length); L >= 2; L--){
+      const m = memberByNameBatch(run.slice(-L), r[2]);
+      if(m){ const e = r.index + r[0].length; found.push({ s: r.index + run.length - L, e, m }); break; }
+    }
+  }
+  const re2 = /(?<!\d)(\d{1,3})\s*회?\s*([가-힣]+)/g;
+  while((r = re2.exec(text))){
+    const run = r[2];
+    for(let L = Math.min(4, run.length); L >= 2; L--){
+      const m = memberByNameBatch(run.slice(0, L), r[1]);
+      if(m){ found.push({ s: r.index, e: r.index + r[0].length - (run.length - L), m }); break; }
+    }
+  }
+  found.sort((a, b) => a.s - b.s || b.e - a.e);
+  const out = []; let pos = 0;
+  found.forEach(f => { if(f.s < pos) return; out.push(esc(text.slice(pos, f.s))); out.push(`<a class="ewho-link" onclick="event.stopPropagation(); openMemberProfileModal('${f.m.id}')" title="누르면 쪽지·연락처 요청">${esc(text.slice(f.s, f.e))}</a>`); pos = f.e; });
+  if(!out.length) return null;
+  out.push(esc(text.slice(pos)));
+  return out.join('');
+}
+function linkMembersInHtml(html){
+  if(!currentMember() || !state.members.length || !html) return html;
+  try{
+    const doc = new DOMParser().parseFromString('<body>' + html + '</body>', 'text/html');
+    const walker = doc.createTreeWalker(doc.body, NodeFilter.SHOW_TEXT);
+    const nodes = []; let n;
+    while((n = walker.nextNode())){ if(!n.parentElement || !n.parentElement.closest('a,script,style')) nodes.push(n); }
+    nodes.forEach(t => {
+      if(!/\d/.test(t.nodeValue)) return;
+      const h = linkMemberText(t.nodeValue);
+      if(h === null) return;
+      const span = doc.createElement('span'); span.innerHTML = h;
+      t.replaceWith(...span.childNodes);
+    });
+    return doc.body.innerHTML;
+  }catch(e){ return html; }
+}
 function richView(item, plainStyle){
   if(!item || !item.content) return '';
-  if(item.rich) return `<div class="rt-content">${sanitizeRich(item.content, true)}</div>`;
-  return `<p style="${plainStyle || 'font-size:13.5px; line-height:1.6; margin:0;'}">${esc(item.content).replace(/\n/g,'<br>')}</p>`;
+  if(item.rich) return `<div class="rt-content">${linkMembersInHtml(sanitizeRich(item.content, true))}</div>`;
+  return `<p style="${plainStyle || 'font-size:13.5px; line-height:1.6; margin:0;'}">${linkMembersInHtml(esc(item.content).replace(/\n/g,'<br>'))}</p>`;
 }
 function richInitial(item){
   if(!item || !item.content) return '';
