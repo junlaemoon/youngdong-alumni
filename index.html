@@ -279,6 +279,10 @@ main#app{padding:16px 16px 4px;}
 .rt-content th,.rt-content td{border:1px solid #CBD5E1; padding:6px 8px; min-width:48px; vertical-align:top; font-size:13px;}
 .rt-content th{background:#F1F5F9; font-weight:700;}
 .rt-wrap{overflow-x:auto; margin:6px 0;}
+/* 본문 표: 줄바꿈 없이 한 줄이 기본, 관리자가 칸 너비를 정하면(data-cw) 그 너비 안에서 줄바꿈 */
+.rt-content:not(.rt-area) table:not(.entry-table):not([data-cw]) td,.rt-content:not(.rt-area) table:not(.entry-table):not([data-cw]) th{white-space:nowrap;}
+.rt-content:not(.rt-area) table[data-cw]{table-layout:fixed; min-width:0;}
+.rt-content:not(.rt-area) table[data-cw] td,.rt-content:not(.rt-area) table[data-cw] th{overflow-wrap:anywhere; word-break:keep-all;}
 
 /* PC 와이드 레이아웃 */
 @media (min-width: 900px){
@@ -2664,7 +2668,7 @@ function exportDealParticipants(id){
 /* ---------------------------------------------------------
    리치 텍스트 편집기 (글꼴·색·표 등) + 안전한 HTML 정리(sanitize)
 --------------------------------------------------------- */
-const RT_ALLOWED = new Set(['B','STRONG','I','EM','U','S','STRIKE','DEL','SPAN','P','DIV','BR','H2','H3','H4','UL','OL','LI','BLOCKQUOTE','HR','A','TABLE','THEAD','TBODY','TR','TD','TH','SUB','SUP']);
+const RT_ALLOWED = new Set(['B','STRONG','I','EM','U','S','STRIKE','DEL','SPAN','P','DIV','BR','H2','H3','H4','UL','OL','LI','BLOCKQUOTE','HR','A','TABLE','THEAD','TBODY','TR','TD','TH','SUB','SUP','COLGROUP','COL']);
 const RT_DROP = new Set(['SCRIPT','STYLE','IFRAME','OBJECT','EMBED','LINK','META','NOSCRIPT','TEMPLATE','SVG','MATH','FORM','INPUT','BUTTON','SELECT','TEXTAREA','VIDEO','AUDIO','IMG']);
 const RT_FONT_PX = {1:'11px',2:'12px',3:'14px',4:'16px',5:'19px',6:'23px',7:'28px'};
 function rtCleanStyle(st){
@@ -2713,7 +2717,20 @@ function sanitizeRich(html, wrapTables){
       if(tag === 'TD' || tag === 'TH'){
         ['colspan','rowspan'].forEach(a => { const v = parseInt(node.getAttribute(a),10); if(v > 1 && v < 30) el.setAttribute(a, String(v)); });
       }
+      let cw = '';
+      if(tag === 'TABLE'){
+        const a = (node.getAttribute('data-cw') || '').trim();
+        if(/^\d{2,4}(,\d{2,4}){0,39}$/.test(a)){ cw = a; el.setAttribute('data-cw', a); }
+        const g = (node.getAttribute('data-cg') || '').trim(); if(/^[a-z0-9]{1,8}$/i.test(g)) el.setAttribute('data-cg', g);
+      }
       walk(node, el);
+      if(tag === 'TABLE' && cw && wrapTables){
+        const nums = cw.split(',').map(Number);
+        const cg = document.createElement('colgroup');
+        nums.forEach(n => { const c = document.createElement('col'); c.setAttribute('style', 'width:' + n + 'px'); cg.appendChild(c); });
+        el.insertBefore(cg, el.firstChild);
+        el.setAttribute('style', ((el.getAttribute('style') || '') + ';width:' + nums.reduce((a, b) => a + b, 0) + 'px').replace(/^;/, ''));
+      }
       if(wrapTables && tag === 'TABLE'){ const w = document.createElement('div'); w.className = 'rt-wrap'; w.appendChild(el); dst.appendChild(w); }
       else dst.appendChild(el);
     });
@@ -2734,7 +2751,7 @@ function memberByNameBatch(name, num){
 function linkMemberText(text){
   const found = [];   // {s, e, m}
   let r;
-  const re1 = /([가-힣]+)\s*(\d{1,3})(?!\d)/g;
+  const re1 = /([가-힣]+)\)?\s*(\d{1,3})(?!\d)/g;
   while((r = re1.exec(text))){
     const run = r[1];
     for(let L = Math.min(4, run.length); L >= 2; L--){
@@ -2774,9 +2791,139 @@ function linkMembersInHtml(html){
     return doc.body.innerHTML;
   }catch(e){ return html; }
 }
+
+// 본문 표 칸 너비 조정 (관리자): 칸 오른쪽 경계를 끌면 data-cw 로 저장되어 모든 회원 화면에 적용.
+// 같은 글의 표를 '묶음'(data-cg)으로 지정하면 묶인 표들이 같은 칸 너비로 함께 바뀜
+function tblMeasure(t){ return Array.prototype.map.call(t.rows[0].cells, x => Math.round(x.getBoundingClientRect().width)); }
+function tblApply(t, widths, base){
+  if(!t.rows[0]) return [];
+  const n = t.rows[0].cells.length; base = base || [];
+  const arr = []; for(let i = 0; i < n; i++) arr.push(Math.max(30, Math.min(1200, widths[i] != null ? widths[i] : (base[i] || 80))));
+  let cg = t.querySelector(':scope > colgroup');
+  if(!cg){ cg = document.createElement('colgroup'); for(let i = 0; i < n; i++) cg.appendChild(document.createElement('col')); t.insertBefore(cg, t.firstChild); }
+  const cols = cg.querySelectorAll('col'); arr.forEach((w, i) => { if(cols[i]) cols[i].style.width = w + 'px'; });
+  t.style.width = arr.reduce((x, y) => x + y, 0) + 'px';
+  t.setAttribute('data-cw', arr.join(','));
+  return arr;
+}
+function tblPeers(t){
+  const g = t.getAttribute('data-cg'); const box = t.closest('.rt-content[data-rid]');
+  if(!g || !box) return [];
+  return Array.prototype.filter.call(box.querySelectorAll('table'), x => x !== t && x.getAttribute('data-cg') === g && x.rows[0] && !x.querySelector('[colspan],[rowspan]'));
+}
+(function(){
+  let drag = null;
+  const EDGE = 7;
+  const cellAt = t => (t && t.closest) ? t.closest('.rt-content[data-rid] td, .rt-content[data-rid] th') : null;
+  const nearEdge = (c, x) => { const r = c.getBoundingClientRect(); return x >= r.right - EDGE && x <= r.right + 3; };
+  document.addEventListener('pointermove', e => {
+    if(drag){
+      const w = Math.max(30, Math.min(1200, Math.round(drag.w0 + e.clientX - drag.x0)));
+      drag.widths[drag.i] = w;
+      tblApply(drag.table, drag.widths);
+      drag.peers.forEach(p => tblApply(p.t, drag.widths, p.base));
+      return;
+    }
+    if(!isAdmin() || e.pointerType === 'touch') return;
+    const c = cellAt(e.target);
+    document.body.style.cursor = (c && nearEdge(c, e.clientX)) ? 'col-resize' : '';
+  });
+  document.addEventListener('pointerdown', e => {
+    if(!isAdmin()) return;
+    const c = cellAt(e.target); if(!c || !nearEdge(c, e.clientX)) return;
+    const table = c.closest('table'); if(!table || table.classList.contains('entry-table')) return;
+    if(table.querySelector('[colspan],[rowspan]')){ showToast('칸을 합친 표는 칸 너비 조정이 안 돼요'); return; }
+    if(!table.rows[0]) return;
+    e.preventDefault();
+    const widths = tblMeasure(table);
+    const peers = tblPeers(table).map(t => ({ t, base: tblMeasure(t) }));
+    tblApply(table, widths);
+    drag = { table, i: c.cellIndex, x0: e.clientX, w0: widths[c.cellIndex], widths, peers, box: c.closest('.rt-content[data-rid]') };
+  });
+  const end = () => {
+    if(!drag) return; const d = drag; drag = null; document.body.style.cursor = '';
+    const ups = [{ table: d.table, cw: d.table.getAttribute('data-cw') }].concat(d.peers.map(p => ({ table: p.t, cw: p.t.getAttribute('data-cw') })));
+    saveTableWidths(d.box, ups);
+  };
+  document.addEventListener('pointerup', end); document.addEventListener('pointercancel', end);
+  document.addEventListener('dblclick', e => {
+    if(!isAdmin()) return;
+    const c = cellAt(e.target); if(!c || !nearEdge(c, e.clientX)) return;
+    const table = c.closest('table'); if(!table || table.classList.contains('entry-table')) return;
+    const box = c.closest('.rt-content[data-rid]');
+    const all = [table].concat(tblPeers(table));
+    all.forEach(t => { t.removeAttribute('data-cw'); t.removeAttribute('style'); const cg = t.querySelector(':scope > colgroup'); if(cg) cg.remove(); });
+    saveTableWidths(box, all.map(t => ({ table: t, cw: '' })));
+  });
+})();
+// 글(공지·소식) 안의 표 속성(data-cw·data-cg)을 저장. mut(tablesArray)로 수정
+async function mutateItemTables(rid, mut){
+  if(!isAdmin()) return false;
+  const lists = [[state.notices, saveNotices], [state.posts, savePosts]];
+  for(const [arr, save] of lists){
+    const item = arr.find(x => x.id === rid); if(!item || !item.rich) continue;
+    const doc = new DOMParser().parseFromString('<body>' + item.content + '</body>', 'text/html');
+    mut(Array.prototype.slice.call(doc.body.querySelectorAll('table')));
+    item.content = doc.body.innerHTML;
+    await save();
+    return true;
+  }
+  return false;
+}
+async function saveTableWidths(box, ups){
+  if(!box) return;
+  const rid = box.getAttribute('data-rid');
+  const tables = Array.prototype.slice.call(box.querySelectorAll('table'));
+  const m = ups.map(u => ({ idx: tables.indexOf(u.table), cw: u.cw })).filter(x => x.idx >= 0);
+  await mutateItemTables(rid, ts => m.forEach(x => { const t = ts[x.idx]; if(!t) return; if(x.cw) t.setAttribute('data-cw', x.cw); else t.removeAttribute('data-cw'); }));
+}
+// 표 칸 너비 묶기: 어느 표들을 같은 칸 너비로 함께 움직일지 고르기
+function openTableGroupModal(rid){
+  if(!isAdmin()) return;
+  const item = [].concat(state.notices, state.posts).find(x => x.id === rid); if(!item || !item.rich) return;
+  const doc = new DOMParser().parseFromString('<body>' + item.content + '</body>', 'text/html');
+  const ts = Array.prototype.slice.call(doc.body.querySelectorAll('table'));
+  const rows = ts.map((t, i) => {
+    const first = (t.rows[0] && t.rows[0].cells[0] ? t.rows[0].cells[0].textContent : '').trim().slice(0, 24);
+    const cols = t.rows[0] ? t.rows[0].cells.length : 0;
+    const merged = !!t.querySelector('[colspan],[rowspan]');
+    return `<label style="display:flex; gap:8px; align-items:center; padding:7px 4px; border-bottom:1px solid var(--line); font-size:13.5px;">
+      <input type="checkbox" class="tgChk" data-i="${i}" ${t.getAttribute('data-cg') ? 'checked' : ''} ${merged ? 'disabled' : ''} style="width:auto;">
+      <span><b>표 ${i + 1}</b> · ${cols}칸 · ${esc(first || '(빈 칸)')}${merged ? ' <span class="helper">(칸 합침 — 제외)</span>' : ''}</span></label>`;
+  }).join('');
+  openModal('표 칸 너비 묶기', `
+    <p class="helper" style="margin-top:0;">체크한 표들은 한 묶음이 되어, 한 표의 칸 경계를 끌면 <b>다른 묶인 표도 같은 칸 너비</b>로 함께 바뀌어요. (칸 수가 다르면 겹치는 칸까지만 맞춰져요)</p>
+    <div style="display:flex; gap:6px; margin-bottom:6px;">
+      <button class="btn btn-ghost btn-sm" onclick="document.querySelectorAll('.tgChk:not(:disabled)').forEach(c => c.checked = true)">전체 선택</button>
+      <button class="btn btn-ghost btn-sm" onclick="document.querySelectorAll('.tgChk').forEach(c => c.checked = false)">전체 해제</button>
+    </div>
+    <div>${rows || '<p class="helper">이 글에는 표가 없어요</p>'}</div>
+    <button class="btn btn-accent btn-block" style="margin-top:12px;" onclick="saveTableGroup('${esc(rid)}')">저장</button>`, true);
+}
+async function saveTableGroup(rid){
+  if(!isAdmin()) return;
+  const chosen = new Set(Array.prototype.map.call(document.querySelectorAll('.tgChk:checked'), c => Number(c.getAttribute('data-i'))));
+  const ok = await mutateItemTables(rid, ts => {
+    let ref = '';
+    ts.forEach((t, i) => { if(chosen.has(i) && !ref && t.getAttribute('data-cw')) ref = t.getAttribute('data-cw'); });
+    ts.forEach((t, i) => {
+      if(chosen.has(i) && chosen.size > 1){
+        t.setAttribute('data-cg', 'g1');
+        if(ref){   // 묶는 순간 첫 번째 너비 기준으로 맞춤 (칸 수가 다르면 겹치는 칸까지)
+          const n = t.rows[0] ? t.rows[0].cells.length : 0; const base = ref.split(',');
+          const cur = (t.getAttribute('data-cw') || '').split(',');
+          const arr = []; for(let k = 0; k < n; k++) arr.push(base[k] || cur[k] || '120');
+          t.setAttribute('data-cw', arr.join(','));
+        }
+      } else t.removeAttribute('data-cg');
+    });
+  });
+  showToast(ok ? (chosen.size > 1 ? `표 ${chosen.size}개를 묶었어요` : '묶음을 해제했어요') : '저장 실패');
+  closeModal(); renderApp();
+}
 function richView(item, plainStyle){
   if(!item || !item.content) return '';
-  if(item.rich) return `<div class="rt-content">${linkMembersInHtml(sanitizeRich(item.content, true))}</div>`;
+  if(item.rich) return `<div class="rt-content" data-rid="${esc(item.id || '')}">${linkMembersInHtml(sanitizeRich(item.content, true))}</div>${isAdmin() && /<table/i.test(item.content) ? `<div class="col-hint">↔ 표의 칸 경계를 좌우로 끌면 칸 너비를 조정해요 (모든 회원 화면에 적용) · 경계를 더블클릭하면 처음 크기${(item.content.match(/<table/gi) || []).length > 1 ? ` · <a onclick="event.stopPropagation(); openTableGroupModal('${esc(item.id || '')}')">🔗 표 칸 너비 묶기</a>` : ''}</div>` : ''}`;
   return `<p style="${plainStyle || 'font-size:13.5px; line-height:1.6; margin:0;'}">${linkMembersInHtml(esc(item.content).replace(/\n/g,'<br>'))}</p>`;
 }
 function richInitial(item){
