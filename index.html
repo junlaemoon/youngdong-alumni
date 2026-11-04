@@ -467,6 +467,16 @@ function currentMember(){
 }
 function isAdmin(){ const m = currentMember(); return !!m && m.role === 'admin'; }
 const PERM_LABEL = { meetup: '모임 생성', notice: '공지 작성', feed: '소식 작성', members: '회원 관리', mypage: '동문정보 관리' };
+const MEETUP_GROUPS = ['총동문회', '지역/기수모임'];
+// 분류가 정해지지 않은 예전 모임은 '사무국 전용이거나 관리자가 연 모임 → 총동문회', 나머지는 '지역/기수모임'으로 추정
+function meetupGroupOf(mt){
+  if(MEETUP_GROUPS.includes(mt.group)) return mt.group;
+  const host = state.members.find(m => m.id === mt.hostId);
+  return (mt.requiredTier === 'office' || (host && host.role === 'admin')) ? MEETUP_GROUPS[0] : MEETUP_GROUPS[1];
+}
+function meetupGroupField(id, cur){
+  return `<div class="field"><label>분류</label><select id="${id}">${MEETUP_GROUPS.map(g => `<option value="${g}" ${g === cur ? 'selected' : ''}>${g}</option>`).join('')}</select></div>`;
+}
 const TIER_LABEL = { office: '총동문회 사무국', officer: '모임 임원', member: '일반 회원' };
 const TIER_RANK = { member: 1, officer: 2, office: 3 };
 function memberTier(m){ return (m && m.tier) || 'member'; }
@@ -1588,7 +1598,9 @@ function exportYearlyReport(){
   ];
   XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(summary), '요약');
 
-  const meetupRows = [...state.meetups].sort((a,b)=>(a.date+a.time).localeCompare(b.date+b.time)).map(mt => ({
+  const meetupRows = [...state.meetups].sort((a,b)=>(a.date+a.time).localeCompare(b.date+b.time)).map((mt, i) => ({
+    'No.': i + 1,
+    '분류': meetupGroupOf(mt),
     '모임이름': mt.title,
     '일시': `${mt.date} ${mt.time}`,
     '장소': mt.location,
@@ -1598,7 +1610,8 @@ function exportYearlyReport(){
   }));
   XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(meetupRows), '모임목록');
 
-  const memberRows = state.members.map(m => ({
+  const memberRows = state.members.map((m, i) => ({
+    'No.': i + 1,
     '이름': m.name,
     '기수': batchNumber(m.batch),
     '직함': m.title || '',
@@ -1661,6 +1674,7 @@ function addMeetup(data){
   state.meetups.push({
     id: uid(),
     title: data.title.trim(),
+    group: ((document.getElementById('mtGroup') || {}).value) || MEETUP_GROUPS[1],
     date: data.date,
     time: data.time,
     location: data.location.trim(),
@@ -1735,6 +1749,7 @@ function openEditMeetupModal(id){
   pendingPostImage = mt.image || null;
   openModal('모임 수정', `
     <div class="field"><label>모임 이름</label><input id="editMtTitle" value="${mt.title.replace(/"/g,'&quot;')}"></div>
+    ${meetupGroupField('editMtGroup', meetupGroupOf(mt))}
     <div class="row2">
       <div class="field"><label>모임 시작일</label><input id="editMtDate" type="date" value="${mt.date}"></div>
       <div class="field"><label>시작시간</label><input id="editMtTime" type="time" value="${mt.time}"></div>
@@ -1772,6 +1787,7 @@ function saveEditedMeetup(id){
   const info = document.getElementById('editMtInfo').value.trim();
   if(!title || !date || !time || !location){ showToast('모임 이름 · 일시 · 장소는 꼭 입력해주세요'); return; }
   const dateTimeChanged = (mt.date !== date || mt.time !== time);
+  mt.group = ((document.getElementById('editMtGroup') || {}).value) || meetupGroupOf(mt);
   mt.title = title; mt.date = date; mt.time = time; mt.location = location; mt.capacity = capacity;
   mt.mapUrl = mapUrl; mt.subgroups = subgroup.split('\n').map(s=>s.trim()).filter(Boolean); mt.info = info; mt.image = pendingPostImage; mt.requiredTier = requiredTier;
   if(dateTimeChanged) mt.rescheduledAt = Date.now();
@@ -2082,6 +2098,14 @@ function closeModal(){
   document.getElementById('modal-root').innerHTML = '';
   if(histM && !pendingBack && history.state && history.state.m){ pendingBack = true; history.back(); }
 }
+// ESC 키: 열려 있는 창 닫기 (상세 창 위의 창이면 상세 창으로 돌아감). 입력 중인 글이 있으면 한 번 확인
+document.addEventListener('keydown', e => {
+  if(e.key !== 'Escape' || e.isComposing || e.defaultPrevented || !modalIsOpen()) return;
+  const el = document.activeElement;
+  const typing = el && (el.isContentEditable ? (el.textContent || '').trim() : (/^(INPUT|TEXTAREA)$/.test(el.tagName) && el.type !== 'checkbox' && el.type !== 'radio' && (el.value || '').trim()));
+  if(typing && !confirm('작성 중인 내용이 사라져요. 닫을까요?')) return;
+  closeModal();
+});
 function openModal(title, bodyHtml, closeOnBackdrop){
   const _prevBack = window._modalBack; window._modalBack = null;
   if(!_restoring){ if(!modalIsOpen()) _modalStack.length = 0; else if(_prevBack) _modalStack.push(_prevBack); }
@@ -2184,6 +2208,7 @@ function openMeetupModal(){
   pendingPostImage = null;
   openModal('모임 등록', `
     <div class="field"><label>모임 이름</label><input id="mtTitle" placeholder="예: 제42회 정기총회 및 동문의 밤"></div>
+    ${meetupGroupField('mtGroup', isAdmin() ? MEETUP_GROUPS[0] : MEETUP_GROUPS[1])}
     <div class="row2">
       <div class="field"><label>모임 시작일</label><input id="mtDate" type="date" value="${d}"></div>
       <div class="field"><label>시작시간</label><input id="mtTime" type="time" value="06:00"></div>
