@@ -3203,7 +3203,14 @@ function entryWho(e){
   const nameHtml = mem
     ? `<a class="ewho-link" onclick="openMemberProfileModal('${mem.id}')" title="누르면 쪽지·연락처 요청">${esc(nm)}</a>`
     : esc(nm);
-  return `<div class="clamp2" style="--cl:${entryLinesOf('svc')}">` + (e.batch ? `<span style="white-space:nowrap;">${esc(e.batch)}회</span> ` : '') + `<span>${nameHtml}</span><a class="clamp-more" style="display:none;" onclick="toggleClamp(this)">더보기</a></div>`;
+  let co = '';
+  if(e.name2){   // 공동대표
+    const m2 = me ? entryMember({ name: e.name2, batch: e.batch2 }) : null;
+    const n2 = me ? e.name2 : maskName(e.name2);
+    co = ` <span style="color:var(--ink-soft);">·</span> ` + (e.batch2 ? `<span style="white-space:nowrap;">${esc(e.batch2)}회</span> ` : '')
+      + (m2 ? `<a class="ewho-link" onclick="openMemberProfileModal('${m2.id}')" title="누르면 쪽지·연락처 요청">${esc(n2)}</a>` : `<span>${esc(n2)}</span>`);
+  }
+  return `<div class="clamp2" style="--cl:${entryLinesOf('svc')}">` + (e.batch ? `<span style="white-space:nowrap;">${esc(e.batch)}회</span> ` : '') + `<span>${nameHtml}</span>${co}<a class="clamp-more" style="display:none;" onclick="toggleClamp(this)">더보기</a></div>`;
 }
 // 주요서비스: 2줄까지만 보이고, 넘치면 2째 줄 끝에 '더보기'
 function entryClamp(text){
@@ -3313,8 +3320,10 @@ function entryMatchMembers(e){
 function entryMember(e){ const ms = entryMatchMembers(e); return ms.length === 1 ? ms[0] : null; }
 // 관리자가 대신 올린 글도 로그인한 회원의 이름+기수와 일치하면 본인이 수정할 수 있게 인식 (직함은 무시)
 function entryOwnerByName(e, me){
-  if(!e || !me || !e.byAdmin || !e.name) return false;
-  return entryMatchMembers(e).some(m => m.id === me.id) && entryMatchMembers(e).length === 1;
+  if(!e || !me) return false;
+  const chk = x => { const ms = entryMatchMembers(x); return ms.length === 1 && ms[0].id === me.id; };
+  if(e.byAdmin && e.name && chk(e)) return true;
+  return !!(e.name2 && chk({ name: e.name2, batch: e.batch2 }));   // 공동대표도 본인 글로 인식
 }
 const ENTRY_GROUP_INFO = {
   '생활·자영업': { icon:'🍽', desc:'식당·카페·휴대폰·금은방 등 일상에서 만나는 동문 가게예요. 모임 장소, 선물, 단골집을 찾을 때 이용하세요.' },
@@ -3652,6 +3661,7 @@ function openEntryModal(nid, group){
       </div>
     </div>` : `<div class="card" style="background:#F7F8FA; font-size:13px;">기수·성함: <b>${me.batch ? esc(String(batchNumber(me.batch))) + '회 ' : ''}${esc(me.name)}</b> (내 정보로 자동 입력)</div>`}
     ${window._entryGroup ? `<div class="card" style="background:#EEF4FF; font-size:13px;">등록 분야: <b>${esc(GL(window._entryGroup))}</b></div>` : ''}
+    <div class="field"><label>공동대표 <span class="helper">(선택 · 공동대표가 있을 때만)</span></label><div style="display:flex; gap:8px;"><input id="enBatch2" type="number" min="1" placeholder="기수(숫자)" style="width:90px;" value=""><input id="enName2" placeholder="성함" maxlength="20" style="flex:1;" value=""></div></div>
     ${entryCatFieldHtml(nid, '', window._entryGroup)}
     <div class="field"><label>상호명 *</label><input id="enCompany" placeholder="예: 영동식당" maxlength="25"></div>
     <div class="field"><label>홈페이지·SNS 링크 <span class="helper">(선택 · 넣으면 상호명을 눌러 이동해요 · 예: instagram.com/영동식당)</span></label><input id="enHome" placeholder="예: https://blog.naver.com/..." maxlength="300"></div>
@@ -3684,7 +3694,7 @@ function addEntry(nid){
   const cardUpd = saveEntryCard(id, nid, window._enCard === null ? undefined : window._enCard);
   db.collection('noticeEntries').doc(id).set(Object.assign({
     id, noticeId: nid, category: entryCatValue(), company, service, address, homepage,
-    memberId: me.id, name: nm, batch: bt, byAdmin, mapUrl: mapUrl || '', group: window._entryGroup || '', createdAt: Date.now(),
+    memberId: me.id, name: nm, batch: bt, name2: v('enName2'), batch2: v('enName2') ? (Number(v('enBatch2')) || '') : '', byAdmin, mapUrl: mapUrl || '', group: window._entryGroup || '', createdAt: Date.now(),
   }, cardUpd)).then(() => { showToast('등록했어요'); }).catch(() => showToast('등록 실패, 다시 시도해주세요'));
   logActivity('업체 직접 등록', company);
   closeModal();
@@ -3702,6 +3712,7 @@ function openEntryEditModal(id, nid){
         <input id="enBatch" type="number" min="1" placeholder="기수(숫자)" style="width:90px;" value="${e.batch || ''}">
         <input id="enName" placeholder="성함" maxlength="30" style="flex:1;" value="${val(e.name)}">
       </div></div>` : `<div class="card" style="background:#F7F8FA; font-size:13px;">기수·성함: <b>${e.batch ? e.batch + '회 ' : ''}${val(e.name)}</b></div>`}
+    <div class="field"><label>공동대표 <span class="helper">(선택 · 공동대표가 있을 때만)</span></label><div style="display:flex; gap:8px;"><input id="enBatch2" type="number" min="1" placeholder="기수(숫자)" style="width:90px;" value="${e.batch2 || ''}"><input id="enName2" placeholder="성함" maxlength="20" style="flex:1;" value="${val(e.name2)}"></div></div>
     ${entryCatFieldHtml(nid, e.category, groupOf(e))}
     ${adm ? `<div class="field"><label>대분류 <span class="helper">(관리자 전용 — 자동 판정이 틀릴 때만 지정, 현재 자동: ${esc(groupOf(Object.assign({}, e, {group:''})) || '판정 불가')})</span></label><select id="enGroup"><option value="">(자동)</option>${ENTRY_GROUPS.map(g => `<option value="${g}" ${e.group === g ? 'selected' : ''}>${esc(GL(g))}</option>`).join('')}</select></div>` : ''}
     <div class="field"><label>상호명 *</label><input id="enCompany" maxlength="${adm ? 100 : 25}" value="${val(e.company)}"></div>
@@ -3728,7 +3739,7 @@ function saveEntryEdit(id, nid){
   let mapUrl = e.mapUrl || '';
   if(adm){ mapUrl = v('enMap') || sp.url; if(mapUrl && !safeMapUrl(mapUrl)){ showToast('지도 링크는 네이버·카카오·구글 지도 주소만 쓸 수 있어요'); return; } }
   else if(address !== e.address) mapUrl = '';
-  const upd = Object.assign({ category: entryCatValue(), company, service, address, homepage, mapUrl: mapUrl || '', editedAt: Date.now() }, saveEntryCard(id, nid, window._enCard));
+  const upd = Object.assign({ name2: v('enName2'), batch2: v('enName2') ? (Number(v('enBatch2')) || '') : '', category: entryCatValue(), company, service, address, homepage, mapUrl: mapUrl || '', editedAt: Date.now() }, saveEntryCard(id, nid, window._enCard));
   if(adm){ upd.name = v('enName') || e.name; upd.batch = Number(v('enBatch')) || ''; upd.group = (document.getElementById('enGroup') || {}).value || ''; }
   db.collection('noticeEntries').doc(id).update(upd).then(() => showToast('수정했어요')).catch(() => showToast('수정 실패, 다시 시도해주세요'));
   logActivity('등록 명단 수정', company);
@@ -3819,7 +3830,7 @@ function deleteEntry(id, nid){
 function exportEntries(nid){
   if(!isAdmin()) return;
   const n = state.notices.find(x => x.id === nid);
-  const rows = (entryStore[nid] || []).map((e,i) => ({ 'No.': i+1, '대분류': groupOf(e), '업종': e.category||'', '상호명': e.company, '홈페이지·SNS': e.homepage||'', '주요서비스': e.service, '기수': e.batch||'', '성함': e.name, '주소': e.address, '지도링크': e.mapUrl||'', '등록일시': new Date(e.createdAt).toLocaleString('ko-KR') }));
+  const rows = (entryStore[nid] || []).map((e,i) => ({ 'No.': i+1, '대분류': groupOf(e), '업종': e.category||'', '상호명': e.company, '홈페이지·SNS': e.homepage||'', '주요서비스': e.service, '기수': e.batch||'', '성함': e.name, '공동대표 기수': e.batch2||'', '공동대표 성함': e.name2||'', '주소': e.address, '지도링크': e.mapUrl||'', '등록일시': new Date(e.createdAt).toLocaleString('ko-KR') }));
   const ws = XLSX.utils.json_to_sheet(rows); const wb = XLSX.utils.book_new(); XLSX.utils.book_append_sheet(wb, ws, '등록명단');
   XLSX.writeFile(wb, `${n ? n.title : '공지'}_회원등록명단.xlsx`);
 }
