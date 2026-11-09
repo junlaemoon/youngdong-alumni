@@ -3209,14 +3209,14 @@ function entryWho(e){
     ? `<a class="ewho-link" onclick="openMemberProfileModal('${mem.id}')" title="누르면 쪽지·연락처 요청">${esc(nm)}</a>`
     : esc(nm);
   let co = '';
-  if(e.name2){   // 공동대표
+  if(e.name2){   // 공동대표: 칸이 넓으면 가로로 나란히, 좁으면 아래 줄로 (사람 단위로 줄바꿈)
     const m2 = me ? entryMember({ name: e.name2, batch: e.batch2 }) : null;
     const n2 = me ? e.name2 : maskName(e.name2);
-    co = `<span style="display:block;">` + (e.batch2 ? `<span style="white-space:nowrap;">${esc(e.batch2)}회</span> ` : '')
+    co = ` <span style="color:var(--ink-soft);">·</span> <span style="white-space:nowrap;">` + (e.batch2 ? `${esc(e.batch2)}회 ` : '')
       + (m2 ? `<a class="ewho-link" onclick="openMemberProfileModal('${m2.id}')" title="누르면 쪽지·연락처 요청">${esc(n2)}</a>` : `<span>${esc(n2)}</span>`) + `</span>`;
   }
-  // 공동대표가 있는 행은 두 사람이 한 줄씩 보이도록 최소 2줄 (그 외에는 관리자가 정한 줄 수)
-  return `<div class="clamp2" style="--cl:${e.name2 ? Math.max(2, entryLinesOf('who')) : entryLinesOf('who')}">` + (e.name2 ? '<span style="display:block;">' : '') + (e.batch ? `<span style="white-space:nowrap;">${esc(e.batch)}회</span> ` : '') + `<span>${nameHtml}</span>` + (e.name2 ? '</span>' : '') + `${co}<a class="clamp-more" style="display:none;" onclick="toggleClamp(this)">더보기</a></div>`;
+  // 공동대표가 있는 행은 두 줄까지 허용 (그 외에는 관리자가 정한 줄 수)
+  return `<div class="clamp2" style="--cl:${e.name2 ? Math.max(2, entryLinesOf('who')) : entryLinesOf('who')}"><span style="white-space:nowrap;">` + (e.batch ? `${esc(e.batch)}회 ` : '') + `<span>${nameHtml}</span></span>${co}<a class="clamp-more" style="display:none;" onclick="toggleClamp(this)">더보기</a></div>`;
 }
 // 주요서비스: 2줄까지만 보이고, 넘치면 2째 줄 끝에 '더보기'
 function entryClamp(text){
@@ -3355,6 +3355,39 @@ function setEntryLines(kind, n){
   db.collection('meta').doc('entryCols').set({ lines: state.entryLines }, { merge: true }).catch(() => showToast('저장 실패, 다시 시도해주세요'));
   document.querySelectorAll('.entries-box[data-nid]').forEach(b => renderEntryBoxes(b.getAttribute('data-nid')));
 }
+
+// 업체 표 세로 칸(보이는 줄 수) 조정 (관리자): 행 아래 경계를 위아래로 끌면 상호·주요서비스·주소 줄 수가 함께 바뀜
+(function(){
+  let drag = null; const EDGE = 5;
+  const cellAt = t => (t && t.closest) ? t.closest('.entry-table tbody td') : null;
+  const desktop = c => { const tb = c.closest('table'); return tb && getComputedStyle(tb).display !== 'block'; };
+  const nearBottom = (c, y) => { const r = c.getBoundingClientRect(); return y >= r.bottom - EDGE && y <= r.bottom + 3; };
+  function applyRows(n, persist){
+    state.entryLines = Object.assign({}, state.entryLines || {}, { who: n, svc: n, addr: n });
+    if(persist) db.collection('meta').doc('entryCols').set({ lines: state.entryLines }, { merge: true }).catch(() => showToast('저장 실패, 다시 시도해주세요'));
+  }
+  document.addEventListener('pointermove', e => {
+    if(drag){
+      const n = Math.max(1, Math.min(6, Math.round(drag.n0 + (e.clientY - drag.y0) / drag.lh)));
+      if(n !== drag.n){ drag.n = n; applyRows(n, false); renderEntryBoxes(drag.nid); }
+      return;
+    }
+    if(!isAdmin() || e.pointerType === 'touch') return;
+    const c = cellAt(e.target);
+    document.body.style.cursor = (c && desktop(c) && nearBottom(c, e.clientY)) ? 'row-resize' : (document.body.style.cursor === 'row-resize' ? '' : document.body.style.cursor);
+  });
+  document.addEventListener('pointerdown', e => {
+    if(!isAdmin()) return;
+    const c = cellAt(e.target); if(!c || !desktop(c) || !nearBottom(c, e.clientY)) return;
+    const box = c.closest('.entries-box[data-nid]'); if(!box) return;
+    const cl = c.closest('table').querySelector('.clamp2');
+    const lh = cl ? (parseFloat(getComputedStyle(cl).lineHeight) || 18) : 18;
+    e.preventDefault();
+    drag = { nid: box.getAttribute('data-nid'), y0: e.clientY, n0: entryLinesOf('svc'), n: entryLinesOf('svc'), lh };
+  });
+  const end = () => { if(!drag) return; const d = drag; drag = null; document.body.style.cursor = ''; applyRows(d.n, true); };
+  document.addEventListener('pointerup', end); document.addEventListener('pointercancel', end);
+})();
 function entryColsNow(){ const c = normEntryCols(state.entryCols); return c || ENTRY_COLS_DEFAULT; }
 let entryColDragging = false;
 function entryTableHtml(list, nid, g, canAct){
@@ -3365,7 +3398,7 @@ function entryTableHtml(list, nid, g, canAct){
   const heads = [0,1,2,3].map(i => { const k = (i === 1 && g === ENTRY_GROUPS[3]) ? 'entHead1P' : 'entHead' + i; return TXH(k) + txPen(k); });
   const th = heads.map((h, i) => `<th>${h}${adm && i < 3 ? `<span class="col-rs" data-i="${i}" onpointerdown="entryColDrag(event)" title="드래그해서 칸 너비 조정"></span>` : ''}</th>`).join('');
   const lsel = (kind, label) => `<label style="white-space:nowrap;">${label} <select onchange="setEntryLines('${kind}', this.value)" style="width:auto; padding:1px 4px; font-size:12px;">${[1,2,3,4,5,6].map(n => `<option value="${n}" ${entryLinesOf(kind) === n ? 'selected' : ''}>${n}줄</option>`).join('')}</select></label>`;
-  return (adm ? `<div class="line-ctl">보이는 줄 수 (넘치면 더보기) · ${lsel('who','상호·성함')} ${lsel('svc','주요서비스')} ${lsel('addr','주소')}</div>` : '') + (adm ? `<div class="col-hint">↔ 제목줄의 칸 경계를 좌우로 끌어서 칸 너비를 조정하세요 (모든 회원 화면에 적용) · <a onclick="resetEntryCols()">처음 크기로</a></div>` : '') + `<div class="rt-wrap"><div class="rt-content"><table class="entry-table">
+  return (adm ? `<div class="line-ctl">보이는 줄 수 (넘치면 더보기) · ${lsel('who','상호·성함')} ${lsel('svc','주요서비스')} ${lsel('addr','주소')}</div>` : '') + (adm ? `<div class="col-hint">↔ 제목줄의 칸 경계를 좌우로 끌면 칸 너비, ↕ 행의 아래 경계를 위아래로 끌면 보이는 줄 수(세로 칸)가 조정돼요 (모든 회원 화면에 적용) · <a onclick="resetEntryCols()">처음 크기로</a></div>` : '') + `<div class="rt-wrap"><div class="rt-content"><table class="entry-table">
       <colgroup>${w.map(x => `<col style="width:${x}">`).join('')}${hasActs ? '<col style="width:6%">' : ''}</colgroup>
       <thead><tr>${th}${hasActs ? '<th></th>' : ''}</tr></thead>
       <tbody>${list.map(e => `<tr><td class="ec-co">${entryCoCell(e)}</td><td class="ec-svc">${entryClamp(e.service)}</td><td class="ec-who">${entryWho(e)}</td><td class="ec-addr">${entryAddrCell(e)}</td>${hasActs ? `<td class="ec-acts">${canAct(e) ? `<button class="btn btn-ghost entry-more" onclick="openEntryActions('${e.id}','${nid}')" title="수정·삭제${adm ? '·이동' : ''}">⋯</button>` : ''}</td>` : ''}</tr>`).join('')}</tbody>
@@ -3670,7 +3703,7 @@ function openEntryModal(nid, group){
       </div>
     </div>` : `<div class="card" style="background:#F7F8FA; font-size:13px;">기수·성함: <b>${me.batch ? esc(String(batchNumber(me.batch))) + '회 ' : ''}${esc(me.name)}</b> (내 정보로 자동 입력)</div>`}
     ${window._entryGroup ? `<div class="card" style="background:#EEF4FF; font-size:13px;">등록 분야: <b>${esc(GL(window._entryGroup))}</b></div>` : ''}
-    <div class="field"><label>공동대표 <span class="helper">(선택 · 공동대표가 있을 때만)</span></label><div style="display:flex; gap:8px;"><input id="enBatch2" type="number" min="1" placeholder="기수(숫자)" style="width:90px;" value=""><input id="enName2" placeholder="성함" maxlength="20" style="flex:1;" value=""></div></div>
+    <div class="field"><label>공동대표 <span class="helper">(선택 · <b>대표자는 최대 2인까지만</b> 등록할 수 있어요)</span></label><div style="display:flex; gap:8px;"><input id="enBatch2" type="number" min="1" placeholder="기수(숫자)" style="width:90px;" value=""><input id="enName2" placeholder="성함" maxlength="20" style="flex:1;" value=""></div></div>
     ${entryCatFieldHtml(nid, '', window._entryGroup)}
     <div class="field"><label>상호명 *</label><input id="enCompany" placeholder="예: 영동식당" maxlength="25"></div>
     ${window._entryGroup === ENTRY_GROUPS[3] ? '' : `<div class="field"><label>홈페이지·SNS 링크 <span class="helper">(선택 · 넣으면 상호명을 눌러 이동해요 · 예: instagram.com/영동식당)</span></label><input id="enHome" placeholder="예: https://blog.naver.com/..." maxlength="300"></div>`}
@@ -3721,7 +3754,7 @@ function openEntryEditModal(id, nid){
         <input id="enBatch" type="number" min="1" placeholder="기수(숫자)" style="width:90px;" value="${e.batch || ''}">
         <input id="enName" placeholder="성함" maxlength="30" style="flex:1;" value="${val(e.name)}">
       </div></div>` : `<div class="card" style="background:#F7F8FA; font-size:13px;">기수·성함: <b>${e.batch ? e.batch + '회 ' : ''}${val(e.name)}</b></div>`}
-    <div class="field"><label>공동대표 <span class="helper">(선택 · 공동대표가 있을 때만)</span></label><div style="display:flex; gap:8px;"><input id="enBatch2" type="number" min="1" placeholder="기수(숫자)" style="width:90px;" value="${e.batch2 || ''}"><input id="enName2" placeholder="성함" maxlength="20" style="flex:1;" value="${val(e.name2)}"></div></div>
+    <div class="field"><label>공동대표 <span class="helper">(선택 · <b>대표자는 최대 2인까지만</b> 등록할 수 있어요)</span></label><div style="display:flex; gap:8px;"><input id="enBatch2" type="number" min="1" placeholder="기수(숫자)" style="width:90px;" value="${e.batch2 || ''}"><input id="enName2" placeholder="성함" maxlength="20" style="flex:1;" value="${val(e.name2)}"></div></div>
     ${entryCatFieldHtml(nid, e.category, groupOf(e))}
     ${adm ? `<div class="field"><label>대분류 <span class="helper">(관리자 전용 — 자동 판정이 틀릴 때만 지정, 현재 자동: ${esc(groupOf(Object.assign({}, e, {group:''})) || '판정 불가')})</span></label><select id="enGroup"><option value="">(자동)</option>${ENTRY_GROUPS.map(g => `<option value="${g}" ${e.group === g ? 'selected' : ''}>${esc(GL(g))}</option>`).join('')}</select></div>` : ''}
     <div class="field"><label>상호명 *</label><input id="enCompany" maxlength="${adm ? 100 : 25}" value="${val(e.company)}"></div>
