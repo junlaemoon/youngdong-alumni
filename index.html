@@ -2541,36 +2541,87 @@ function renderDealsTab(){
     <p class="helper" style="margin-top:14px;">${TXH('dealsHelp')}${txPen('dealsHelp')}</p>
   `;
 }
+const DEAL_DESC_TEMPLATE = ['▶ 상품 소개: ', '▶ 원산지·유통기한: ', '▶ 유의사항: '].join('\n');
+// 여러 상품: '상품명 - 29,900원' 형태로 한 줄에 하나씩 적으면 자동 인식 (기존 안내글을 붙여넣기 해도 됨)
+function parseDealOptions(text){
+  const out = []; let skipped = 0;
+  String(text || '').split('\n').forEach(raw => {
+    let l = raw.trim(); if(!l) return;
+    l = l.replace(/^\s*(\[\s*\d+\s*번?\s*\]|\(?\d+[.)번]|[①-⑳■▪•·\-*])\s*/, '');
+    let m = null, r; const re = /(\d[\d,]*)\s*원/g; while((r = re.exec(l))) m = r;
+    let price = 0, name = l;
+    if(m){ price = Number(m[1].replace(/,/g, '')); name = l.slice(0, m.index); }
+    else { const t = l.match(/(\d[\d,]{3,})\s*$/); if(t){ price = Number(t[1].replace(/,/g, '')); name = l.slice(0, t.index); } }
+    name = name.replace(/[\s\-–—:：/~·|,]+$/, '').trim();
+    if(!name || !(price > 0)){ skipped++; return; }
+    out.push({ n: name.slice(0, 60), p: price });
+  });
+  const res = out.slice(0, 30); res.skipped = skipped;
+  return res;
+}
+function dealOptsInfo(){
+  const el = document.getElementById('dlOptsInfo'); if(!el) return;
+  const t = (document.getElementById('dlOpts') || {}).value || '';
+  if(!t.trim()){ el.textContent = ''; return; }
+  const o = parseDealOptions(t);
+  el.textContent = o.length ? `✅ 상품 ${o.length}개 인식${o.skipped ? ` (가격을 못 찾은 ${o.skipped}줄 제외)` : ''}` : '⚠️ 가격을 찾지 못했어요 (예: 상품명 - 29,900원)';
+}
+function dealPriceText(opts){
+  const ps = opts.map(o => o.p); const a = Math.min(...ps), b = Math.max(...ps);
+  return a === b ? a.toLocaleString('ko-KR') + '원' : a.toLocaleString('ko-KR') + '원 ~ ' + b.toLocaleString('ko-KR') + '원';
+}
+function dealItemsText(items){ return (items || []).map(it => `${it.n} × ${it.q}`).join(', '); }
 function openDealModal(){
   if(!requireLogin()) return;
   pendingPostImage = null;
   const me = currentMember();
+  const dl = new Date(); dl.setDate(dl.getDate() + 14);
+  const req = '<span style="color:#D92D20;">*</span>';
   openModal('공동구매 등록', `
-    <p class="helper">${isAdmin() ? '' : '등록하면 관리자 확인 후 게시돼요.'}</p>
-    <div class="field"><label>상품·서비스 이름</label><input id="dlTitle" placeholder="예: 산지직송 사과 10kg"></div>
-    <div class="field"><label>업체(회사)명</label><input id="dlCompany" placeholder="예: OO농원"></div>
-    <div class="field"><label>가격 / 동문 할인 조건</label><input id="dlPrice" placeholder="예: 39,000원 (정가 49,000원)"></div>
-    <div class="field"><label>상세 설명</label><textarea id="dlDesc" rows="4" placeholder="상품 소개, 배송 방법, 유의사항 등"></textarea></div>
-    <div class="field"><label>문의 연락처</label><input id="dlContact" placeholder="전화번호 또는 이메일 (참여 동문에게만 보여요)"></div>
-    <div class="field"><label>모집 마감일</label><input id="dlDeadline" type="date"></div>
+    <p class="helper" style="margin-top:0;">${req} 표시만 필수예요. 나머지는 비워도 돼요.${isAdmin() ? '' : ' 등록하면 관리자 확인 후 게시돼요.'}</p>
+    <div class="field"><label>상품·서비스 이름 ${req}</label><input id="dlTitle" placeholder="예: 산지직송 사과 10kg"></div>
+    <div class="field"><label>업체(회사)명 ${req}</label><input id="dlCompany" placeholder="예: OO농원"></div>
+    <div class="field"><label>가격 / 동문 할인 조건 ${req} <span class="helper">(상품이 여러 개면 아래 '추가 설정'에 적으면 비워도 돼요)</span></label><input id="dlPrice" placeholder="예: 39,000원 (정가 49,000원)"></div>
     <div style="display:flex; gap:8px;">
-      <div class="field" style="flex:1;"><label>최소 인원</label><input id="dlMin" type="number" min="0" placeholder="0"></div>
-      <div class="field" style="flex:1;"><label>최대 인원 (0=제한없음)</label><input id="dlMax" type="number" min="0" placeholder="0"></div>
+      <div class="field" style="flex:1.2;"><label>모집 마감일 ${req}</label><input id="dlDeadline" type="date" value="${ymd(dl)}" min="${ymd(new Date())}"></div>
+      <div class="field" style="flex:1.5;"><label>문의 연락처 ${req}</label><input id="dlContact" value="${esc(me && me.phone ? maskPhone(me.phone) : '')}" placeholder="전화번호 또는 이메일"></div>
     </div>
-    <label class="file-btn">📷 사진 추가 (선택)<input type="file" accept="image/*" style="display:none" onchange="handleImageSelect(this)"></label>
+    <p class="helper" style="margin:-4px 0 10px;">연락처는 참여한 동문에게만 보여요. (내 번호가 미리 들어가 있어요)</p>
+    <label class="file-btn">📷 대표 사진 추가 ${req}<input type="file" accept="image/*" style="display:none" onchange="handleImageSelect(this)"></label>
     <img id="postImagePreview" class="image-preview">
-    <button class="btn btn-accent btn-block" style="margin-top:14px;" onclick="addDeal()">등록하기</button>
+    <div class="field" style="margin-top:12px;"><label>상세 설명 <span class="helper">(선택 · 아는 것만 채워도 돼요, 빈 줄은 자동으로 빠져요)</span></label><textarea id="dlDesc" rows="5">${esc(DEAL_DESC_TEMPLATE)}</textarea></div>
+    <details style="margin-bottom:6px;"><summary style="cursor:pointer; font-size:13px; font-weight:700; color:var(--ink-soft);">추가 설정 (선택) · 여러 상품 · 배송비 · 입금계좌 · 인원 제한</summary>
+      <div class="field" style="margin-top:10px;"><label>상품 목록 <span class="helper">(여러 개일 때 · 한 줄에 하나씩, 참여자가 골라서 수량을 입력해요)</span></label>
+        <textarea id="dlOpts" rows="4" oninput="dealOptsInfo()" placeholder="달게티 3팩 선물세트 - 29,900원&#10;달게티 4팩 선물세트 - 39,900원&#10;고메넛츠 선물세트 2호 - 91,200원"></textarea>
+        <div id="dlOptsInfo" class="helper"></div></div>
+      <div class="field"><label>배송·택배비 안내</label><input id="dlShip" maxlength="150" placeholder="예: 택배비 3,000원 (3만원 이상 무료배송)"></div>
+      <div class="field"><label>입금 계좌 <span class="helper">(참여 신청한 동문에게만 보여요)</span></label><input id="dlBank" maxlength="100" placeholder="예: 카카오뱅크 3333-00-000000 예금주 홍길동"></div>
+      <div style="display:flex; gap:8px; margin-top:8px;">
+        <div class="field" style="flex:1;"><label>최소 인원</label><input id="dlMin" type="number" min="0" placeholder="0"></div>
+        <div class="field" style="flex:1;"><label>최대 인원 (0=제한없음)</label><input id="dlMax" type="number" min="0" placeholder="0"></div>
+      </div>
+    </details>
+    <button class="btn btn-accent btn-block" style="margin-top:10px;" onclick="addDeal()">등록하기</button>
   `);
 }
 function addDeal(){
   const me = currentMember(); if(!me) return;
   const v = id => (document.getElementById(id)||{}).value || '';
-  const title = v('dlTitle').trim(), company = v('dlCompany').trim();
-  if(!title || !company){ showToast('상품 이름과 업체명은 꼭 입력해주세요'); return; }
+  const title = v('dlTitle').trim(), company = v('dlCompany').trim(), contact = v('dlContact').trim(), deadline = v('dlDeadline');
+  const options = parseDealOptions(v('dlOpts'));
+  if(v('dlOpts').trim() && !options.length){ showToast('상품 목록에서 가격을 찾지 못했어요. 예: 상품명 - 29,900원'); return; }
+  const price = v('dlPrice').trim() || (options.length ? dealPriceText(options) : '');
+  const miss = [];
+  if(!title) miss.push('상품 이름'); if(!company) miss.push('업체명'); if(!price) miss.push('가격·할인 조건');
+  if(!deadline) miss.push('마감일'); if(!contact) miss.push('문의 연락처'); if(!pendingPostImage) miss.push('대표 사진');
+  if(miss.length){ showToast('필수 항목을 입력해주세요: ' + miss.join(', ')); return; }
+  if(deadline < ymd(new Date())){ showToast('마감일이 이미 지났어요. 오늘 이후로 정해주세요'); return; }
+  // 안 채운 템플릿 줄('▶ 항목:' 만 있는 줄)은 제거
+  const desc = v('dlDesc').split('\n').filter(l => !/^\s*▶[^:：]*[:：]\s*$/.test(l)).join('\n').trim();
   const needsApproval = !isAdmin();
   state.deals.unshift({
-    id: uid(), title, company, price: v('dlPrice').trim(), desc: v('dlDesc').trim(), contact: v('dlContact').trim(),
-    deadline: v('dlDeadline'), minCount: Number(v('dlMin')) || 0, maxCount: Number(v('dlMax')) || 0,
+    id: uid(), title, company, price, desc, contact, options, shipInfo: v('dlShip').trim(), bank: v('dlBank').trim(),
+    deadline, minCount: Number(v('dlMin')) || 0, maxCount: Number(v('dlMax')) || 0,
     image: pendingPostImage, ownerId: me.id, ownerName: me.name, ownerBatch: batchNumber(me.batch) || '',
     participants: [], status: needsApproval ? 'pending' : 'approved', createdAt: Date.now(),
   });
@@ -2604,6 +2655,7 @@ function openDealDetailModal(id, noTrack){
   const people = (isOwner || isAdmin()) ? `
     <div class="section-title">참여자 (${st.n})</div>
     ${st.n ? `<p class="helper" style="margin:0 0 6px;">총 수량 ${sumQty}개 · 입금액 합계 ${sumAmt.toLocaleString('ko-KR')}원 · 입금확인 ${paidN}/${st.n}명</p>` : ''}
+    ${(d.options || []).length && st.n ? `<div class="card" style="padding:8px 12px; margin:0 0 6px; font-size:12.5px;"><b>상품별 주문 합계</b><br>${d.options.map(o => { const q = (d.participants || []).reduce((t, p) => t + (((p.items || []).find(it => it.n === o.n) || {}).q || 0), 0); return q ? `${esc(o.n)} <b>${q}개</b>` : ''; }).filter(Boolean).join('<br>') || '-'}</div>` : ''}
     ${(d.participants||[]).map((p,i) => { const m = state.members.find(x=>x.id===p.memberId); return `
       <div class="card" style="padding:10px 12px; margin:6px 0;">
         <div style="display:flex; justify-content:space-between; align-items:center; gap:8px;">
@@ -2624,7 +2676,10 @@ function openDealDetailModal(id, noTrack){
     <div class="meetup-meta">${esc(d.company)} · ${esc(d.ownerName||'')}${d.ownerBatch ? ` (${esc(String(d.ownerBatch))}회)` : ''}</div>
     ${d.price ? `<div style="font-weight:800; font-size:17px; margin:6px 0;">${esc(d.price)}</div>` : ''}
     <div class="req-sub" style="margin-bottom:8px;">참여 ${st.n}${d.minCount ? ` / 최소 ${d.minCount}명${st.success ? ' ✅ 성사' : ''}` : '명'}${d.maxCount ? ` · 최대 ${d.maxCount}명` : ''}${d.deadline ? ` · 마감 ${fmtDateKR(d.deadline)}` : ''}</div>
+    ${(d.options || []).length ? `<div class="card" style="padding:8px 12px; margin:6px 0;"><div class="req-sub" style="margin-bottom:4px;">상품 ${d.options.length}개</div>${d.options.map((o, i) => `<div class="req-row" style="padding:3px 0;"><span class="req-name" style="font-weight:600;">${i + 1}. ${esc(o.n)}</span><span style="font-weight:800; white-space:nowrap;">${Number(o.p).toLocaleString('ko-KR')}원</span></div>`).join('')}</div>` : ''}
+    ${d.shipInfo ? `<div class="req-sub" style="margin:4px 0;">🚚 ${esc(d.shipInfo)}</div>` : ''}
     ${d.desc ? `<p style="white-space:pre-wrap; font-size:13.5px; line-height:1.65;">${esc(d.desc)}</p>` : ''}
+    ${d.bank ? `<div class="card" style="background:#FFFBEB; border-color:#FDE68A;">🏦 입금 계좌: ${canSeeContact ? `<b>${esc(d.bank)}</b>` : '참여 신청한 동문에게 공개돼요'}</div>` : ''}
     <div class="card" style="background:#F7F8FA;">📞 문의: ${canSeeContact ? esc(d.contact || '(미입력)') : '참여 신청한 동문에게 공개돼요'}</div>
     ${joinBtn}${adminBtns}
     ${people}
@@ -2636,9 +2691,11 @@ function openDealDetailModal(id, noTrack){
 }
 function dealApplyRowsHtml(p){
   const row = (k, v) => v ? `<div class="req-row" style="padding:3px 0;"><span class="req-sub" style="white-space:nowrap;">${k}</span><span class="req-name" style="font-weight:600; text-align:right; word-break:break-all;">${v}</span></div>` : '';
-  return row('구매수량', p.qty ? esc(String(p.qty)) + '개' : '')
+  return (p.items && p.items.length ? row('선택 상품', p.items.map(it => `${esc(it.n)} × ${it.q}`).join('<br>')) : '')
+    + row('구매수량', p.qty ? esc(String(p.qty)) + '개' : '')
     + row('입금액', p.amount ? Number(p.amount).toLocaleString('ko-KR') + '원' : '')
     + row('입금', `${p.paid ? '✅ 입금했어요' : '⬜ 미입금'}${p.paidConfirmed ? ' · <b style="color:#15803D;">운영자 확인</b>' : ''}`)
+    + row('입금자명', esc(p.payer || ''))
     + row('받는분', esc(p.receiver || ''))
     + row('연락처', esc(p.phone || ''))
     + row('주소', esc(p.address || ''))
@@ -2651,27 +2708,47 @@ function openDealJoinModal(id){
   const mine = (d.participants||[]).find(p => p.memberId === me.id);
   if(!mine && dealState(d).closed) return;
   const p = mine || {};
+  const opts = Array.isArray(d.options) ? d.options : [];
   openModal(mine ? '참여 신청 정보 수정' : '참여 신청', `
     <p class="helper" style="margin-top:0;">${esc(d.title)}${d.price ? ' · ' + esc(d.price) : ''}</p>
+    ${opts.length ? `
+    <div class="card" style="padding:8px 12px; margin:6px 0 10px;">
+      <div class="req-sub" style="margin-bottom:4px;">원하는 상품의 수량을 입력하세요 (안 살 상품은 0)</div>
+      ${opts.map((o, i) => { const q = ((p.items || []).find(it => it.n === o.n) || {}).q || 0; return `
+      <div style="display:flex; align-items:center; gap:8px; padding:5px 0; border-top:${i ? '1px solid var(--line)' : 'none'};">
+        <div style="flex:1; min-width:0; font-size:13.5px;"><b>${i + 1}.</b> ${esc(o.n)}<br><span class="req-sub">${Number(o.p).toLocaleString('ko-KR')}원</span></div>
+        <input id="jnO${i}" type="number" min="0" max="999" inputmode="numeric" value="${q}" oninput="dealCalcTotal('${id}')" style="width:70px; text-align:center;">
+      </div>`; }).join('')}
+      <div style="border-top:1px solid var(--line); padding-top:6px; margin-top:4px; text-align:right; font-weight:800;">합계 <span id="jnTotal">0원</span></div>
+    </div>` : `
     <div style="display:flex; gap:8px;">
       <div class="field" style="flex:1;"><label>구매수량 *</label><input id="jnQty" type="number" min="1" inputmode="numeric" value="${p.qty || 1}"></div>
       <div class="field" style="flex:1;"><label>입금액 (원)</label><input id="jnAmount" type="number" min="0" inputmode="numeric" placeholder="예: 39000" value="${p.amount || ''}"></div>
-    </div>
+    </div>`}
     <label style="display:flex; align-items:center; gap:8px; font-size:14px; margin:2px 0 12px; cursor:pointer;"><input type="checkbox" id="jnPaid" ${p.paid ? 'checked' : ''}> 입금 완료했어요</label>
     <div class="field"><label>받는분 *</label><input id="jnReceiver" value="${esc(p.receiver || me.name || '')}"></div>
     <div class="field"><label>연락처 *</label><input id="jnPhone" inputmode="tel" placeholder="010-0000-0000" value="${esc(p.phone || me.phone || '')}"></div>
+    <div class="field"><label>입금자명 <span class="helper">(주문자와 다를 때만)</span></label><input id="jnPayer" maxlength="20" value="${esc(p.payer || '')}"></div>
     <div class="field"><label>주소</label><input id="jnAddr" placeholder="배송받을 주소 (직접 수령이면 비워두세요)" value="${esc(p.address || '')}"></div>
     <div class="field"><label>요청사항</label><textarea id="jnReq" rows="3" placeholder="배송 메모 등">${esc(p.request || '')}</textarea></div>
     <p class="helper">입력한 정보는 판매하는 동문과 관리자에게만 보여요. 입금은 판매자에게 직접 해주세요.</p>
     <button class="btn btn-accent btn-block" onclick="saveDealJoin('${id}')">${mine ? '수정 저장' : '참여 신청하기'}</button>
   `, true);
+  if(opts.length) dealCalcTotal(id);
+}
+function dealCalcTotal(id){
+  const d = state.deals.find(x => x.id === id); if(!d) return;
+  let t = 0; (d.options || []).forEach((o, i) => { t += o.p * Math.max(0, Math.floor(Number((document.getElementById('jnO' + i) || {}).value) || 0)); });
+  const el = document.getElementById('jnTotal'); if(el) el.textContent = t.toLocaleString('ko-KR') + '원';
 }
 function saveDealJoin(id){
   const d = state.deals.find(x => x.id === id); const me = currentMember();
   if(!d || !me) return;
   const v = k => ((document.getElementById(k)||{}).value || '').trim();
-  const qty = Math.floor(Number(v('jnQty')));
-  if(!(qty >= 1)){ showToast('구매수량을 1 이상으로 입력해주세요'); return; }
+  const opts = Array.isArray(d.options) ? d.options : [];
+  const items = opts.map((o, i) => ({ n: o.n, pr: o.p, q: Math.max(0, Math.min(999, Math.floor(Number(v('jnO' + i)) || 0))) })).filter(it => it.q > 0);
+  const qty = opts.length ? items.reduce((t, it) => t + it.q, 0) : Math.floor(Number(v('jnQty')));
+  if(!(qty >= 1)){ showToast(opts.length ? '구매할 상품의 수량을 1개 이상 입력해주세요' : '구매수량을 1 이상으로 입력해주세요'); return; }
   if(!v('jnReceiver')){ showToast('받는분 이름을 입력해주세요'); return; }
   if(!v('jnPhone')){ showToast('연락처를 입력해주세요'); return; }
   d.participants = d.participants || [];
@@ -2681,7 +2758,9 @@ function saveDealJoin(id){
     p = { memberId: me.id, at: Date.now() }; d.participants.push(p);
   }
   p.qty = qty;
-  p.amount = Math.max(0, Number(v('jnAmount')) || 0);
+  if(opts.length){ p.items = items; p.amount = items.reduce((t, it) => t + it.pr * it.q, 0); }
+  else { delete p.items; p.amount = Math.max(0, Number(v('jnAmount')) || 0); }
+  p.payer = v('jnPayer');
   p.paid = !!(document.getElementById('jnPaid') || {}).checked;
   p.receiver = v('jnReceiver'); p.phone = v('jnPhone'); p.address = v('jnAddr'); p.request = v('jnReq');
   p.updatedAt = Date.now();
@@ -2723,7 +2802,7 @@ function exportDealParticipants(id){
   if(!(d.participants||[]).length){ showToast('아직 참여자가 없어요'); return; }
   const rows = d.participants.map((p,i) => {
     const m = state.members.find(x => x.id === p.memberId);
-    return { '상품': d.title, '업체': d.company, 'No.': i+1, '기수': m ? batchNumber(m.batch) : '', '이름': m ? m.name : '(탈퇴회원)', '구매수량': p.qty || '', '입금액': p.amount || '', '입금(참여자 체크)': p.paid ? 'O' : '', '입금확인(운영자)': p.paidConfirmed ? 'O' : '', '받는분': p.receiver || '', '연락처': p.phone || '', '주소': p.address || '', '요청사항': p.request || '', '신청일시': new Date(p.at).toLocaleString('ko-KR') };
+    return { '상품': d.title, '업체': d.company, 'No.': i+1, '기수': m ? batchNumber(m.batch) : '', '이름': m ? m.name : '(탈퇴회원)', '선택상품': dealItemsText(p.items), '구매수량': p.qty || '', '입금액': p.amount || '', '입금자명': p.payer || '', '입금(참여자 체크)': p.paid ? 'O' : '', '입금확인(운영자)': p.paidConfirmed ? 'O' : '', '받는분': p.receiver || '', '연락처': p.phone || '', '주소': p.address || '', '요청사항': p.request || '', '신청일시': new Date(p.at).toLocaleString('ko-KR') };
   });
   const ws = XLSX.utils.json_to_sheet(rows);
   const wb = XLSX.utils.book_new(); XLSX.utils.book_append_sheet(wb, ws, '참여자명단');
