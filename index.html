@@ -1038,6 +1038,7 @@ function textDefs(){
     entHead3:   { label: '업체 표 제목줄 · 주소 칸', def: '주소 (클릭시 지도링크)' },
     entDesc0:   { label: `${ENTRY_GROUPS[0]} 박스 설명`, def: g(0), multi: true },
     entDesc1:   { label: `${ENTRY_GROUPS[1]} 박스 설명`, def: g(1), multi: true },
+    entDesc3:   { label: `${ENTRY_GROUPS[3]} 박스 설명`, def: g(3), multi: true },
     entDesc2:   { label: `${ENTRY_GROUPS[2]} 박스 설명`, def: g(2), multi: true },
     dealsHelp:  { label: '동문장터 하단 안내', def: '결제와 배송은 업체와 동문이 직접 진행해요. 동문회는 소개와 참여자 모집만 도와요.', multi: true },
     membersSub: { label: '회원 탭 소개 문구', def: '함께하는 우리 동문들' },
@@ -1051,6 +1052,10 @@ function textDefs(){
     entIcon0:   { label: '업체 박스1 아이콘(이모지)', def: ENTRY_GROUP_INFO[ENTRY_GROUPS[0]].icon, short: true },
     entName1:   { label: '업체 박스2 이름', def: ENTRY_GROUPS[1], short: true },
     entIcon1:   { label: '업체 박스2 아이콘(이모지)', def: ENTRY_GROUP_INFO[ENTRY_GROUPS[1]].icon, short: true },
+    entName3:   { label: '업체 박스4 이름', def: ENTRY_GROUPS[3], short: true },
+    entIcon3:   { label: '업체 박스4 아이콘(이모지)', def: ENTRY_GROUP_INFO[ENTRY_GROUPS[3]].icon, short: true },
+    catList3:   { label: '박스4 업종 목록 (쉼표로 구분)', def: defCats(3), multi: true },
+    entHead1P:  { label: '업체 표 제목줄 · 주요서비스 칸 (공공·학술 박스용)', def: '소속·직책 (주요 활동)' },
     entName2:   { label: '업체 박스3 이름', def: ENTRY_GROUPS[2], short: true },
     entIcon2:   { label: '업체 박스3 아이콘(이모지)', def: ENTRY_GROUP_INFO[ENTRY_GROUPS[2]].icon, short: true },
     catList0:   { label: '박스1 업종 목록 (쉼표로 구분)', def: defCats(0), multi: true },
@@ -3210,7 +3215,7 @@ function entryWho(e){
     co = ` <span style="color:var(--ink-soft);">·</span> ` + (e.batch2 ? `<span style="white-space:nowrap;">${esc(e.batch2)}회</span> ` : '')
       + (m2 ? `<a class="ewho-link" onclick="openMemberProfileModal('${m2.id}')" title="누르면 쪽지·연락처 요청">${esc(n2)}</a>` : `<span>${esc(n2)}</span>`);
   }
-  return `<div class="clamp2" style="--cl:${entryLinesOf('svc')}">` + (e.batch ? `<span style="white-space:nowrap;">${esc(e.batch)}회</span> ` : '') + `<span>${nameHtml}</span>${co}<a class="clamp-more" style="display:none;" onclick="toggleClamp(this)">더보기</a></div>`;
+  return `<div class="clamp2" style="--cl:${entryLinesOf('who')}">` + (e.batch ? `<span style="white-space:nowrap;">${esc(e.batch)}회</span> ` : '') + `<span>${nameHtml}</span>${co}<a class="clamp-more" style="display:none;" onclick="toggleClamp(this)">더보기</a></div>`;
 }
 // 주요서비스: 2줄까지만 보이고, 넘치면 2째 줄 끝에 '더보기'
 function entryClamp(text){
@@ -3228,11 +3233,12 @@ function fixClamps(){
   });
 }
 let _clampT; window.addEventListener('resize', () => { clearTimeout(_clampT); _clampT = setTimeout(fixClamps, 150); });
-const ENTRY_CATS = ['식당','카페','휴대폰','금은방·귀금속','자동차·정비','미용·뷰티','교육·학원','병원·의료','건강검진','법률·세무','건설·부동산','제조·유통','IT·서비스','금융·보험','기타'];
-const ENTRY_GROUPS = ['생활·자영업','전문직','기업·법인'];
+const ENTRY_CATS = ['식당','카페','휴대폰','금은방·귀금속','자동차·정비','미용·뷰티','교육·학원','병원·의료','건강검진','법률·세무','건설·부동산','제조·유통','IT·서비스','금융·보험','행정·정부','공공기관','정치','학계·교육','연구소','기타'];
+const ENTRY_GROUPS = ['생활·자영업','전문직','기업·법인','공공·학술'];
 const entryGroupSel = {};
 const GROUP_BY_CAT = { '식당':0,'카페':0,'휴대폰':0,'금은방·귀금속':0,'자동차·정비':0,'미용·뷰티':0,'교육·학원':0,
-  '병원·의료':1,'건강검진':1,'법률·세무':1, '건설·부동산':2,'제조·유통':2,'IT·서비스':2,'금융·보험':2 };
+  '병원·의료':1,'건강검진':1,'법률·세무':1, '건설·부동산':2,'제조·유통':2,'IT·서비스':2,'금융·보험':2,
+  '행정·정부':3,'공공기관':3,'정치':3,'학계·교육':3,'연구소':3 };
 // 대분류 자동 판정: 관리자가 지정한 값 > 업종(분류) > 업종·서비스·상호 글자에서 추정
 function groupOf(e){
   if(e.group && ENTRY_GROUPS.includes(e.group)) return e.group;
@@ -3243,6 +3249,7 @@ function groupOf(e){
 function guessGroupFromText(txt){
   const t = String(txt || '').replace(/\s+/g,'');
   if(/의료|병원|의원|치과|약국|한의|검진|의학|법률|변호|세무|회계|법무|노무|건축사|변리/.test(t)) return ENTRY_GROUPS[1];
+  if(/정부|행정|공공기관|공무원|시청|구청|도청|국회|정당|정치|대학교|교수|학회|학술|연구원|연구소|공단/.test(t)) return ENTRY_GROUPS[3];
   if(/제조|유통|무역|소프트|건설|금융|보험|물류|전자|반도체|부동산|IT|시스템|엔지니어/i.test(t)) return ENTRY_GROUPS[2];
   if(/식당|카페|맛집|냉면|만두|국밥|삼계탕|한식|중식|일식|양식|고기|휴대폰|대리점|판매|정비|보석|금은|미용|학원|세탁|편의점|꽃|안경|매장|가게|주점|호프|치킨|빵/.test(t)) return ENTRY_GROUPS[0];
   return '';
@@ -3253,7 +3260,7 @@ function entryCatList(nid, group){
   const gi = group ? ENTRY_GROUPS.indexOf(group) : -1;
   let base;
   if(gi >= 0) base = catListFor(gi);
-  else { base = []; [0,1,2].forEach(i => catListFor(i).forEach(c => { if(!base.includes(c)) base.push(c); })); ENTRY_CATS.forEach(c => { if(!base.includes(c)) base.push(c); }); }
+  else { base = []; [0,1,2,3].forEach(i => catListFor(i).forEach(c => { if(!base.includes(c)) base.push(c); })); ENTRY_CATS.forEach(c => { if(!base.includes(c)) base.push(c); }); }
   (entryStore[nid] || []).forEach(e => {
     const c = (e.category || '').trim();
     if(c && !base.includes(c) && (gi >= 0 ? groupOf(e) === group : true)) base.push(c);
@@ -3328,6 +3335,7 @@ function entryOwnerByName(e, me){
 const ENTRY_GROUP_INFO = {
   '생활·자영업': { icon:'🍽', desc:'식당·카페·휴대폰·금은방 등 일상에서 만나는 동문 가게예요. 모임 장소, 선물, 단골집을 찾을 때 이용하세요.' },
   '전문직': { icon:'⚖️', desc:'법률·세무·의료 등 자격을 갖춘 동문 전문가예요. 믿을 수 있는 상담이 필요할 때 찾아보세요.' },
+  '공공·학술': { icon:'🏛', desc:'정부·공공기관·학계·연구소 등에서 활약하는 동문이에요. 동문 네트워크 참고용으로 봐주세요.' },
   '기업·법인': { icon:'🏢', desc:'제조·유통·IT·건설 등 동문이 운영하는 회사예요. 협력·거래·제휴가 필요할 때 연락해 보세요.' },
   '미분류': { icon:'📂', desc:'분야를 확인 중인 업체예요. 관리자가 곧 정리해요.' },
 };
@@ -3353,10 +3361,10 @@ function entryTableHtml(list, nid, g, canAct){
   const scale = hasActs ? 0.94 : 1;
   const w = entryColsNow().map(x => (x * scale).toFixed(2) + '%');
   const adm = isAdmin();
-  const heads = [0,1,2,3].map(i => TXH('entHead' + i) + txPen('entHead' + i));
+  const heads = [0,1,2,3].map(i => { const k = (i === 1 && g === ENTRY_GROUPS[3]) ? 'entHead1P' : 'entHead' + i; return TXH(k) + txPen(k); });
   const th = heads.map((h, i) => `<th>${h}${adm && i < 3 ? `<span class="col-rs" data-i="${i}" onpointerdown="entryColDrag(event)" title="드래그해서 칸 너비 조정"></span>` : ''}</th>`).join('');
   const lsel = (kind, label) => `<label style="white-space:nowrap;">${label} <select onchange="setEntryLines('${kind}', this.value)" style="width:auto; padding:1px 4px; font-size:12px;">${[1,2,3,4,5,6].map(n => `<option value="${n}" ${entryLinesOf(kind) === n ? 'selected' : ''}>${n}줄</option>`).join('')}</select></label>`;
-  return (adm ? `<div class="line-ctl">보이는 줄 수 (넘치면 더보기) · ${lsel('svc','주요서비스')} ${lsel('addr','주소')}</div>` : '') + (adm ? `<div class="col-hint">↔ 제목줄의 칸 경계를 좌우로 끌어서 칸 너비를 조정하세요 (모든 회원 화면에 적용) · <a onclick="resetEntryCols()">처음 크기로</a></div>` : '') + `<div class="rt-wrap"><div class="rt-content"><table class="entry-table">
+  return (adm ? `<div class="line-ctl">보이는 줄 수 (넘치면 더보기) · ${lsel('who','상호·성함')} ${lsel('svc','주요서비스')} ${lsel('addr','주소')}</div>` : '') + (adm ? `<div class="col-hint">↔ 제목줄의 칸 경계를 좌우로 끌어서 칸 너비를 조정하세요 (모든 회원 화면에 적용) · <a onclick="resetEntryCols()">처음 크기로</a></div>` : '') + `<div class="rt-wrap"><div class="rt-content"><table class="entry-table">
       <colgroup>${w.map(x => `<col style="width:${x}">`).join('')}${hasActs ? '<col style="width:6%">' : ''}</colgroup>
       <thead><tr>${th}${hasActs ? '<th></th>' : ''}</tr></thead>
       <tbody>${list.map(e => `<tr><td class="ec-co">${entryCoCell(e)}</td><td class="ec-svc">${entryClamp(e.service)}</td><td class="ec-who">${entryWho(e)}</td><td class="ec-addr">${entryAddrCell(e)}</td>${hasActs ? `<td class="ec-acts">${canAct(e) ? `<button class="btn btn-ghost entry-more" onclick="openEntryActions('${e.id}','${nid}')" title="수정·삭제${adm ? '·이동' : ''}">⋯</button>` : ''}</td>` : ''}</tr>`).join('')}</tbody>
@@ -3426,7 +3434,7 @@ function renderEntryBoxes(nid){
   const admin = isAdmin();
   const gOf = e => groupOf(e) || '미분류';
   const byG = {}; all.forEach(e => { const g = gOf(e); (byG[g] = byG[g] || []).push(e); });
-  const order = ENTRY_GROUPS.slice().sort((a,b) => (byG[b]||[]).length - (byG[a]||[]).length || a.localeCompare(b, 'ko')).concat(byG['미분류'] ? ['미분류'] : []);
+  const order = ENTRY_GROUPS.slice().sort((a,b) => (byG[b]||[]).length - (byG[a]||[]).length || ENTRY_GROUPS.indexOf(a) - ENTRY_GROUPS.indexOf(b)).concat(byG['미분류'] ? ['미분류'] : []);
   const html = `
     <div class="section-title" style="margin-top:14px;">${TXH('entTitle')} (${all.length})${txPen('entTitle')}</div>
     <p class="helper" style="margin:0 0 4px;">${TXH('entHelp')}${txPen('entHelp')}</p>
@@ -3619,7 +3627,7 @@ function entryCardFieldHtml(e){
 }
 function entryCoCell(e){
   const t = e.thumb ? `<img class="ecard-thumb" src="${e.thumb}" alt="명함" title="눌러서 명함 크게 보기" onclick="openEntryCard('${e.id}')">` : '';
-  return `<span class="ec-co-wrap">${t}<span class="clamp2" style="--cl:${entryLinesOf('svc')}"><span>${(() => { const w = safeWebUrl(e.homepage); return w ? `<a href="${esc(w)}" target="_blank" rel="noopener noreferrer" class="ec-link" title="홈페이지·SNS로 이동">${esc(e.company)}</a>` : esc(e.company); })()}</span><a class="clamp-more" style="display:none;" onclick="toggleClamp(this)">더보기</a></span></span>`;
+  return `<span class="ec-co-wrap">${t}<span class="clamp2" style="--cl:${entryLinesOf('who')}"><span>${(() => { const w = safeWebUrl(e.homepage); return w ? `<a href="${esc(w)}" target="_blank" rel="noopener noreferrer" class="ec-link" title="홈페이지·SNS로 이동">${esc(e.company)}</a>` : esc(e.company); })()}</span><a class="clamp-more" style="display:none;" onclick="toggleClamp(this)">더보기</a></span></span>`;
 }
 async function openEntryCard(id){
   if(!requireLogin()) return;
@@ -3664,7 +3672,7 @@ function openEntryModal(nid, group){
     <div class="field"><label>공동대표 <span class="helper">(선택 · 공동대표가 있을 때만)</span></label><div style="display:flex; gap:8px;"><input id="enBatch2" type="number" min="1" placeholder="기수(숫자)" style="width:90px;" value=""><input id="enName2" placeholder="성함" maxlength="20" style="flex:1;" value=""></div></div>
     ${entryCatFieldHtml(nid, '', window._entryGroup)}
     <div class="field"><label>상호명 *</label><input id="enCompany" placeholder="예: 영동식당" maxlength="25"></div>
-    <div class="field"><label>홈페이지·SNS 링크 <span class="helper">(선택 · 넣으면 상호명을 눌러 이동해요 · 예: instagram.com/영동식당)</span></label><input id="enHome" placeholder="예: https://blog.naver.com/..." maxlength="300"></div>
+    ${window._entryGroup === ENTRY_GROUPS[3] ? '' : `<div class="field"><label>홈페이지·SNS 링크 <span class="helper">(선택 · 넣으면 상호명을 눌러 이동해요 · 예: instagram.com/영동식당)</span></label><input id="enHome" placeholder="예: https://blog.naver.com/..." maxlength="300"></div>`}
     <div class="field"><label>주요서비스 <span class="helper">(선택 · 50자 이내)</span></label><input id="enService" placeholder="예: 한식 · 단체예약 (50자 이내)" maxlength="50"></div>
     <div class="field"><label>주소 <span class="helper">(선택 · 쓰면 이 글자를 눌러 네이버 지도로 자동 연결돼요)</span></label><input id="enAddress" placeholder="예: 서울 강남구 OO로 12 / 강남구청역 행당점 (50자 이내)" maxlength="250"></div>
     ${isAdmin() ? `<div class="field"><label>지도 링크 직접 지정 <span class="helper">(관리자 전용·선택 — 비우면 자동)</span></label><input id="enMap" placeholder="자동 연결이 엉뚱한 곳일 때만 네이버 지도 공유 링크 입력" maxlength="300"></div>` : ''}
@@ -3716,7 +3724,7 @@ function openEntryEditModal(id, nid){
     ${entryCatFieldHtml(nid, e.category, groupOf(e))}
     ${adm ? `<div class="field"><label>대분류 <span class="helper">(관리자 전용 — 자동 판정이 틀릴 때만 지정, 현재 자동: ${esc(groupOf(Object.assign({}, e, {group:''})) || '판정 불가')})</span></label><select id="enGroup"><option value="">(자동)</option>${ENTRY_GROUPS.map(g => `<option value="${g}" ${e.group === g ? 'selected' : ''}>${esc(GL(g))}</option>`).join('')}</select></div>` : ''}
     <div class="field"><label>상호명 *</label><input id="enCompany" maxlength="${adm ? 100 : 25}" value="${val(e.company)}"></div>
-    <div class="field"><label>홈페이지·SNS 링크 <span class="helper">(선택 · 상호명을 누르면 이동해요)</span></label><input id="enHome" maxlength="300" value="${val(e.homepage)}"></div>
+    ${(!adm && groupOf(e) === ENTRY_GROUPS[3]) ? '' : `<div class="field"><label>홈페이지·SNS 링크 <span class="helper">(선택 · 상호명을 누르면 이동해요)</span></label><input id="enHome" maxlength="300" value="${val(e.homepage)}"></div>`}
     <div class="field"><label>주요서비스 <span class="helper">(${adm ? '' : '50자 이내'})</span></label><input id="enService" maxlength="${adm ? 200 : 50}" value="${val(e.service)}"></div>
     <div class="field"><label>주소 <span class="helper">(선택 · 쓰면 이 글자를 눌러 네이버 지도로 자동 연결돼요)</span></label><input id="enAddress" maxlength="${adm ? 250 : 250}" value="${val(e.address)}"></div>
     ${adm ? `<div class="field"><label>지도 링크 직접 지정 <span class="helper">(관리자 전용·선택 — 비우면 자동)</span></label><input id="enMap" maxlength="300" value="${val(e.mapUrl)}"></div>` : ''}
