@@ -738,6 +738,13 @@ async function init(){
 /* ---------------------------------------------------------
    인증
 --------------------------------------------------------- */
+// 중복 가입 확인: 이름(공백 제외) + 기수가 같은 회원을 한 묶음으로 봄
+function dupKey(m){ return normName(m.name) + '|' + (m.batch ? Number(batchNumber(m.batch)) || '' : ''); }
+function dupGroups(){
+  const g = {};
+  state.members.forEach(m => { if(!normName(m.name)) return; (g[dupKey(m)] = g[dupKey(m)] || []).push(m); });
+  return Object.values(g).filter(a => a.length > 1 && !a.every(m => m.dupOk));
+}
 async function doRegister(name, intro, batch, phone, pin, hint){
   name = name.trim();
   phone = normalizePhone(phone);
@@ -749,6 +756,11 @@ async function doRegister(name, intro, batch, phone, pin, hint){
   if(state.members.some(m => m.phone === phone)){
     showToast('이미 등록된 연락처예요. 로그인을 이용해주세요');
     return;
+  }
+  const same = state.members.filter(m => dupKey(m) === dupKey({ name, batch }));
+  if(same.length){
+    const ok = confirm(`이미 같은 이름·기수(${name}${batch.trim() ? ' · ' + batchNumber(batch) + '회' : ''})로 가입된 분이 있어요.\n\n· 본인이라면 [취소]를 누르고 로그인해주세요. (번호가 바뀌었거나 PIN을 잊었다면 운영진에게 문의)\n· 이름·기수가 같은 다른 분(동명이인)이 맞다면 [확인]을 눌러 계속 가입하세요.\n\n본인인데도 [확인]을 누르면 중복 가입으로 운영진에게 표시돼요.`);
+    if(!ok) return;
   }
   const member = {
     id: uid(),
@@ -3212,7 +3224,8 @@ function entryWho(e){
   if(e.name2){   // 공동대표: 칸이 넓으면 가로로 나란히, 좁으면 아래 줄로 (사람 단위로 줄바꿈)
     const m2 = me ? entryMember({ name: e.name2, batch: e.batch2 }) : null;
     const n2 = me ? e.name2 : maskName(e.name2);
-    co = ` <span style="color:var(--ink-soft);">·</span> <span style="white-space:nowrap;">` + (e.batch2 ? `${esc(e.batch2)}회 ` : '')
+    co = ` <span style="color:var(--ink-soft);">·</span> <span style="white-space:nowrap;">` + ((e.batch2 && String(e.batch2) !== String(e.batch || '')) ? `${esc(e.batch2)}회 ` : '')   // 같은 기수면 한 번만 표기
+      
       + (m2 ? `<a class="ewho-link" onclick="openMemberProfileModal('${m2.id}')" title="누르면 쪽지·연락처 요청">${esc(n2)}</a>` : `<span>${esc(n2)}</span>`) + `</span>`;
   }
   // 공동대표가 있는 행은 두 줄까지 허용 (그 외에는 관리자가 정한 줄 수)
@@ -4742,6 +4755,7 @@ function renderMembersTab(){
       <div><div class="disp" style="font-size:20px; font-weight:800;">${stats.누적참석}</div><div class="req-sub">누적 참석(연인원)</div></div>
       <div><div class="disp" style="font-size:20px; font-weight:800;">${stats.총공지+stats.총소식}</div><div class="req-sub">공지+소식</div></div>
     </div>
+    <button class="btn ${dupGroups().length ? 'btn-coral' : 'btn-ghost'} btn-block" onclick="openDupModal()">👥 중복 가입 확인${dupGroups().length ? ` (${dupGroups().length}건 의심)` : ''}</button>
     <button class="btn btn-accent btn-block" onclick="togglePreview()">👁 일반 회원 화면으로 보기 (캡처용 · 관리자 정보 숨김)</button>
     ${backupReminder}
     ${pendingCount ? `<button class="btn btn-accent btn-block" onclick="openPendingMeetupsModal()">🕓 승인 대기 모임 (${pendingCount})</button>` : ''}
@@ -4770,6 +4784,41 @@ function toggleRole(id){
   m.role = m.role === 'admin' ? 'member' : 'admin';
   saveMembers();
   renderAll();
+}
+// 관리자: 중복 가입 확인 (이름+기수가 같은 회원 묶음)
+async function openDupModal(){
+  if(!isAdmin()) return;
+  const groups = dupGroups();
+  openModal('중복 가입 확인', `<p class="helper" style="margin-top:0;">이름과 기수가 같은 회원이에요. 같은 사람이 두 번 가입한 것이면 <b>쓰지 않는 계정을 제외</b>하고, 동명이인이면 <b>동명이인 확인</b>을 눌러 목록에서 빼주세요.</p>
+    <div id="dupBody">${groups.length ? '<p class="helper">불러오는 중…</p>' : '<div class="empty" style="padding:20px 0;">중복으로 보이는 회원이 없어요 👍</div>'}</div>`, true);
+  if(!groups.length) return;
+  const vt = {};
+  await Promise.all(groups.flat().map(m => db.collection('visitTotals').doc(m.id).get().then(d => { vt[m.id] = d.exists ? d.data() : {}; }).catch(() => { vt[m.id] = {}; })));
+  const body = document.getElementById('dupBody'); if(!body) return;
+  const act = id => state.notices.filter(x => x.authorId === id).length + state.posts.filter(x => x.authorId === id).length
+    + state.meetups.reduce((n, mt) => n + mt.participants.filter(p => p.memberId === id).length, 0);
+  body.innerHTML = groups.map((g, gi) => `
+    <div class="card" style="border:1px solid var(--line); margin-bottom:10px;">
+      <div style="font-weight:800; margin-bottom:6px;">${esc(g[0].name)}${g[0].batch ? ' · ' + esc(displayBatch(g[0].batch)) : ''} <span class="req-sub">${g.length}개 계정</span></div>
+      ${g.map(m => { const v = vt[m.id] || {}; return `
+        <div style="display:flex; justify-content:space-between; align-items:center; gap:8px; padding:7px 0; border-top:1px solid var(--line); font-size:13px;">
+          <div>가입 ${esc(m.joinedAt || '-')} · ${esc(maskPhone(m.phone))}${m.role === 'admin' ? ' · 관리자' : ''}<br><span class="req-sub">방문 ${v.count || 0}회 · 마지막 ${esc(v.lastDate || '-')} · 참여/글 ${act(m.id)}건</span></div>
+          ${m.role === 'admin' ? '' : `<button class="btn btn-coral btn-sm" onclick="dupRemove('${m.id}')">이 계정 제외</button>`}
+        </div>`; }).join('')}
+      <button class="btn btn-ghost btn-sm btn-block" style="margin-top:8px;" onclick="dupMarkOk(${gi})">동명이인 확인 (목록에서 빼기)</button>
+    </div>`).join('');
+}
+function dupRemove(id){
+  const m = state.members.find(x => x.id === id); if(!m) return;
+  if(!confirm(`${m.name}${m.batch ? ' · ' + displayBatch(m.batch) : ''} (가입 ${m.joinedAt || '-'}, ${maskPhone(m.phone)}) 계정을 제외할까요?\n이 계정의 모임 신청은 함께 삭제돼요.`)) return;
+  removeMember(id);
+  openDupModal();
+}
+function dupMarkOk(gi){
+  const g = dupGroups()[gi]; if(!g) return;
+  g.forEach(m => { m.dupOk = true; });
+  saveMembers(); showToast('동명이인으로 확인했어요');
+  openDupModal(); renderAll();
 }
 function removeMember(id){
   state.members = state.members.filter(m => m.id !== id);
