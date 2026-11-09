@@ -3212,10 +3212,11 @@ function entryWho(e){
   if(e.name2){   // 공동대표
     const m2 = me ? entryMember({ name: e.name2, batch: e.batch2 }) : null;
     const n2 = me ? e.name2 : maskName(e.name2);
-    co = ` <span style="color:var(--ink-soft);">·</span> ` + (e.batch2 ? `<span style="white-space:nowrap;">${esc(e.batch2)}회</span> ` : '')
-      + (m2 ? `<a class="ewho-link" onclick="openMemberProfileModal('${m2.id}')" title="누르면 쪽지·연락처 요청">${esc(n2)}</a>` : `<span>${esc(n2)}</span>`);
+    co = `<span style="display:block;">` + (e.batch2 ? `<span style="white-space:nowrap;">${esc(e.batch2)}회</span> ` : '')
+      + (m2 ? `<a class="ewho-link" onclick="openMemberProfileModal('${m2.id}')" title="누르면 쪽지·연락처 요청">${esc(n2)}</a>` : `<span>${esc(n2)}</span>`) + `</span>`;
   }
-  return `<div class="clamp2" style="--cl:${entryLinesOf('who')}">` + (e.batch ? `<span style="white-space:nowrap;">${esc(e.batch)}회</span> ` : '') + `<span>${nameHtml}</span>${co}<a class="clamp-more" style="display:none;" onclick="toggleClamp(this)">더보기</a></div>`;
+  // 공동대표가 있는 행은 두 사람이 한 줄씩 보이도록 최소 2줄 (그 외에는 관리자가 정한 줄 수)
+  return `<div class="clamp2" style="--cl:${e.name2 ? Math.max(2, entryLinesOf('who')) : entryLinesOf('who')}">` + (e.name2 ? '<span style="display:block;">' : '') + (e.batch ? `<span style="white-space:nowrap;">${esc(e.batch)}회</span> ` : '') + `<span>${nameHtml}</span>` + (e.name2 ? '</span>' : '') + `${co}<a class="clamp-more" style="display:none;" onclick="toggleClamp(this)">더보기</a></div>`;
 }
 // 주요서비스: 2줄까지만 보이고, 넘치면 2째 줄 끝에 '더보기'
 function entryClamp(text){
