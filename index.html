@@ -198,6 +198,8 @@ main#app{padding:16px 16px 4px;}
 .modal-close{background:none; border:none; font-size:18px; cursor:pointer; color:var(--ink-soft); padding:4px;}
 
 /* toast */
+#previewPill{position:fixed; left:12px; bottom:12px; z-index:95; border:none; border-radius:999px; padding:7px 13px; font-size:12px; font-weight:700; background:rgba(22,36,28,.82); color:#fff; cursor:pointer; opacity:.85;}
+#previewPill:hover{opacity:1;}
 #toast-root{position:fixed; left:50%; transform:translateX(-50%); bottom:24px; z-index:80; display:flex; flex-direction:column; gap:8px; align-items:center;}
 .toast{background:var(--ink); color:#fff; padding:11px 18px; border-radius:30px; font-size:13px; box-shadow:var(--shadow); animation:up .18s ease;}
 
@@ -461,9 +463,30 @@ function maskPhone(p){
   if(!p) return '-';
   return p.replace(/(\d{2,3})-?(\d{3,4})-?(\d{4})/, '$1-$2-$3');
 }
+// '일반 회원 화면 보기'(관리자 전용): 관리자 기능·정보를 숨기고 일반 회원이 보는 그대로 확인 (캡처·점검용)
+let _preview = false; try{ _preview = sessionStorage.getItem('rc_preview') === '1'; }catch(e){}
+const _PV = { role: 'member', tier: 'member', isCreator: false };
 function currentMember(){
   if(!state.session) return null;
-  return state.members.find(m => m.id === state.session.memberId) || null;
+  const m = state.members.find(m => m.id === state.session.memberId) || null;
+  if(m && _preview && m.role === 'admin') return new Proxy(m, { get: (t, k) => (k in _PV ? _PV[k] : t[k]) });
+  return m;
+}
+function realAdmin(){ const m = state.session && state.members.find(x => x.id === state.session.memberId); return !!m && m.role === 'admin'; }
+function togglePreview(){
+  if(!realAdmin()) return;
+  _preview = !_preview;
+  try{ sessionStorage.setItem('rc_preview', _preview ? '1' : '0'); }catch(e){}
+  if(modalIsOpen()) closeModal();
+  switchTab('notice'); renderAll();
+  showToast(_preview ? '일반 회원 화면으로 보고 있어요' : '관리자 화면으로 돌아왔어요');
+}
+function renderPreviewPill(){
+  let el = document.getElementById('previewPill');
+  const on = _preview && realAdmin();
+  if(!on){ if(el) el.remove(); return; }
+  if(!el){ el = document.createElement('button'); el.id = 'previewPill'; el.onclick = togglePreview; document.body.appendChild(el); }
+  el.textContent = '👁 일반 회원 화면 보는 중 · 끝내기';
 }
 function isAdmin(){ const m = currentMember(); return !!m && m.role === 'admin'; }
 const PERM_LABEL = { meetup: '모임 생성', notice: '공지 작성', feed: '소식 작성', members: '회원 관리', mypage: '동문정보 관리' };
@@ -3816,6 +3839,7 @@ function renderSessionChip(){
   renderMemberBell();
   renderMsgBell();
   applyHeaderTexts();
+  renderPreviewPill();
 }
 function getAdminLastSeen(){
   const v = localStorage.getItem('rc_admin_lastSeen');
@@ -4665,6 +4689,7 @@ function renderMembersTab(){
       <div><div class="disp" style="font-size:20px; font-weight:800;">${stats.누적참석}</div><div class="req-sub">누적 참석(연인원)</div></div>
       <div><div class="disp" style="font-size:20px; font-weight:800;">${stats.총공지+stats.총소식}</div><div class="req-sub">공지+소식</div></div>
     </div>
+    <button class="btn btn-accent btn-block" onclick="togglePreview()">👁 일반 회원 화면으로 보기 (캡처용 · 관리자 정보 숨김)</button>
     ${backupReminder}
     ${pendingCount ? `<button class="btn btn-accent btn-block" onclick="openPendingMeetupsModal()">🕓 승인 대기 모임 (${pendingCount})</button>` : ''}
     <button class="btn btn-ghost btn-block" onclick="exportYearlyReport()">📊 연간 리포트 엑셀 다운로드</button>
