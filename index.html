@@ -139,7 +139,8 @@ main#app{padding:16px 16px 4px;}
   aspect-ratio:1; display:flex; flex-direction:column; align-items:center; justify-content:center;
   border-radius:10px; font-size:12.5px; cursor:pointer; position:relative; color:var(--ink);
 }
-.cal-cell.pad{color:#C7C4B6; cursor:default;}
+.cal-cell.pad{opacity:.45;}
+.cal-cell.pad.selected{opacity:1;}
 .cal-cell.today{outline:1.5px solid var(--ink);}
 .cal-cell.holiday{color:#D64545;}
 .cal-cell.saturday{color:#2F6FE0;}
@@ -4406,10 +4407,10 @@ function renderCalendar(){
   const daysInMonth = new Date(y, m+1, 0).getDate();
   const daysInPrev = new Date(y, m, 0).getDate();
   const cells = [];
-  for(let i=startPad-1; i>=0; i--) cells.push({d: daysInPrev-i, pad:true});
+  for(let k=startPad; k>=1; k--){ const dt = new Date(y, m, 1-k); cells.push({d: dt.getDate(), pad:true, dateStr: ymd(dt)}); }
   for(let d=1; d<=daysInMonth; d++) cells.push({d, pad:false, dateStr: `${y}-${String(m+1).padStart(2,'0')}-${String(d).padStart(2,'0')}`});
   let nextDay = 1;
-  while(cells.length % 7 !== 0) cells.push({d: nextDay++, pad:true});
+  while(cells.length % 7 !== 0){ const dt = new Date(y, m+1, nextDay); cells.push({d: nextDay++, pad:true, dateStr: ymd(dt)}); }
 
   const todayStr = ymd(new Date());
   const eventDates = new Set(visibleMeetups().map(mt => mt.date));
@@ -4424,14 +4425,13 @@ function renderCalendar(){
       <div class="cal-grid">
         ${DOW.map(d=>`<div class="cal-dow">${d}</div>`).join('')}
         ${cells.map((c, idx) => {
-          if(c.pad) return `<div class="cal-cell pad">${c.d}</div>`;
           const isToday = c.dateStr === todayStr;
           const isSel = c.dateStr === state.selectedDate;
           const hasEvent = eventDates.has(c.dateStr);
           const hName = holidayName(c.dateStr);
           const col = idx % 7; // 0=일요일 ... 6=토요일
           const dowClass = hName || col === 0 ? 'holiday' : (col === 6 ? 'saturday' : '');
-          return `<div class="cal-cell ${dowClass} ${isToday?'today':''} ${isSel?'selected':''}" onclick="selectDate('${c.dateStr}')" ${hName ? `title="${hName}"` : ''}>
+          return `<div class="cal-cell ${c.pad?'pad':''} ${dowClass} ${isToday?'today':''} ${isSel?'selected':''}" onclick="selectDate('${c.dateStr}')" ${hName ? `title="${hName}"` : ''}>
             <span>${c.d}</span>${hasEvent ? '<span class="cal-mark"></span>' : ''}
           </div>`;
         }).join('')}
@@ -4450,7 +4450,24 @@ function goToday(){
   state.selectedDate = ymd(new Date());
   renderApp();
 }
-function selectDate(dateStr){ state.selectedDate = dateStr; renderApp(); }
+function selectDate(dateStr){
+  state.selectedDate = dateStr;
+  const [yy, mm] = dateStr.split('-').map(Number);
+  const cm = state.calMonth;
+  // 이전·다음 달의 흐린 날짜를 누르면 그 달로 넘어가서 보여줘요
+  if(cm.getFullYear() !== yy || cm.getMonth() !== mm-1) state.calMonth = new Date(yy, mm-1, 1);
+  renderApp();
+}
+// 달력 위에서 마우스 휠(트랙패드 스크롤)로 이전·다음 달 넘기기
+let _calWheelLast = 0;
+document.addEventListener('wheel', e => {
+  const t = e.target && e.target.closest ? e.target.closest('.cal-grid, .cal-head') : null;
+  if(!t || e.ctrlKey || Math.abs(e.deltaY) < 4) return;
+  e.preventDefault();
+  const now = Date.now(), quiet = now - _calWheelLast > 280; // 관성 스크롤 중 연속 넘김 방지
+  _calWheelLast = now;
+  if(quiet) changeMonth(e.deltaY > 0 ? 1 : -1);
+}, { passive: false });
 
 function meetupCard(mt){
   const confirmed = confirmedCount(mt);
