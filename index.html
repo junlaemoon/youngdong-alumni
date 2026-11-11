@@ -133,12 +133,20 @@ main#app{padding:16px 16px 4px;}
 .cal-nav{background:transparent; border:none; font-size:16px; cursor:pointer; color:var(--ink-soft); padding:4px 10px;}
 .cal-title{font-weight:700; font-size:15px;}
 .cal-today{font-size:11.5px; color:var(--river); background:#E8EDF6; padding:5px 10px; border-radius:8px; border:none; cursor:pointer; font-weight:600;}
-.cal-grid{display:grid; grid-template-columns:repeat(7,1fr); gap:4px; text-align:center;}
+.cal-grid{display:grid; grid-template-columns:repeat(7,minmax(0,1fr)); gap:3px; text-align:center;}
 .cal-dow{font-size:11px; color:var(--ink-soft); padding:4px 0 8px; font-weight:600;}
 .cal-cell{
-  aspect-ratio:1; display:flex; flex-direction:column; align-items:center; justify-content:center;
-  border-radius:10px; font-size:12.5px; cursor:pointer; position:relative; color:var(--ink);
+  min-height:64px; display:flex; flex-direction:column; align-items:stretch; justify-content:flex-start; gap:2px;
+  padding:4px 3px 3px; min-width:0; overflow:hidden;
+  border-radius:8px; font-size:12.5px; cursor:pointer; position:relative; color:var(--ink);
 }
+.cal-cell > .cal-d{text-align:center; line-height:1.3; font-weight:600;}
+.cal-ev{display:block; font-size:10px; line-height:1.35; padding:0 4px; border-radius:4px; background:#E3E9F5; color:var(--river); font-weight:600; text-align:left; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;}
+.cal-ev.pend{background:#FFF3D6; color:#8A6200;}
+.cal-more{font-size:9.5px; line-height:1.2; color:var(--ink-soft); text-align:left; padding:0 4px; font-weight:600;}
+.cal-cell.selected .cal-ev{background:rgba(255,255,255,.22); color:#fff;}
+.cal-cell.selected .cal-more{color:#d6dbe8;}
+@media (max-width:640px){ .cal-cell{min-height:56px; padding:3px 2px 2px;} .cal-ev{font-size:9px; padding:0 3px;} }
 .cal-cell.pad{opacity:.45;}
 .cal-cell.pad.selected{opacity:1;}
 .cal-cell.today{outline:1.5px solid var(--ink);}
@@ -4413,7 +4421,8 @@ function renderCalendar(){
   while(cells.length % 7 !== 0){ const dt = new Date(y, m+1, nextDay); cells.push({d: nextDay++, pad:true, dateStr: ymd(dt)}); }
 
   const todayStr = ymd(new Date());
-  const eventDates = new Set(visibleMeetups().map(mt => mt.date));
+  const evByDate = {};
+  visibleMeetups().slice().sort((a,b)=> (a.time||'').localeCompare(b.time||'')).forEach(mt => { (evByDate[mt.date] = evByDate[mt.date] || []).push(mt); });
 
   return `
     <div class="card">
@@ -4427,12 +4436,12 @@ function renderCalendar(){
         ${cells.map((c, idx) => {
           const isToday = c.dateStr === todayStr;
           const isSel = c.dateStr === state.selectedDate;
-          const hasEvent = eventDates.has(c.dateStr);
+          const evs = evByDate[c.dateStr] || [];
           const hName = holidayName(c.dateStr);
           const col = idx % 7; // 0=일요일 ... 6=토요일
           const dowClass = hName || col === 0 ? 'holiday' : (col === 6 ? 'saturday' : '');
           return `<div class="cal-cell ${c.pad?'pad':''} ${dowClass} ${isToday?'today':''} ${isSel?'selected':''}" onclick="selectDate('${c.dateStr}')" ${hName ? `title="${hName}"` : ''}>
-            <span>${c.d}</span>${hasEvent ? '<span class="cal-mark"></span>' : ''}
+            <span class="cal-d">${c.d}</span>${evs.slice(0,2).map(mt => `<span class="cal-ev ${mt.status==='pending'?'pend':''}">${esc(mt.title)}</span>`).join('')}${evs.length > 2 ? `<span class="cal-more">+${evs.length-2}개</span>` : ''}
           </div>`;
         }).join('')}
       </div>
