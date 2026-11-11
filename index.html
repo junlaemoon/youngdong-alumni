@@ -4864,6 +4864,7 @@ function renderMembersTab(){
       <div><div class="disp" style="font-size:20px; font-weight:800;">${stats.누적참석}</div><div class="req-sub">누적 참석(연인원)</div></div>
       <div><div class="disp" style="font-size:20px; font-weight:800;">${stats.총공지+stats.총소식}</div><div class="req-sub">공지+소식</div></div>
     </div>
+    <button class="btn ${locCandidates().length ? 'btn-coral' : 'btn-ghost'} btn-block" onclick="openLocMigrateModal()">📍 설명란의 거주지·직장 옮기기${locCandidates().length ? ` (${locCandidates().length}명)` : ''}</button>
     <button class="btn ${dupGroups().length ? 'btn-coral' : 'btn-ghost'} btn-block" onclick="openDupModal()">👥 중복 가입 확인${dupGroups().length ? ` (${dupGroups().length}건 의심)` : ''}</button>
     <button class="btn btn-accent btn-block" onclick="togglePreview()">👁 일반 회원 화면으로 보기 (캡처용 · 관리자 정보 숨김)</button>
     ${backupReminder}
@@ -4895,6 +4896,66 @@ function toggleRole(id){
   renderAll();
 }
 // 관리자: 중복 가입 확인 (이름+기수가 같은 회원 묶음)
+// ── 기존 '설명'란에 적힌 거주지·직장을 새 칸으로 옮기기 (관리자 · 미리보기 후 적용) ──
+const LOC_REGION = /(서울|부산|대구|인천|광주|대전|울산|세종|경기|강원|충북|충남|전북|전남|경북|경남|제주|[가-힣]{1,4}(시|구|군))/;
+function locGuess(intro){
+  const segs = String(intro||'').split(/\s*(?:\/|,|·|;|\||\n)\s*/).map(x=>x.trim()).filter(Boolean);
+  let home = '', work = '', rest = [];
+  const clean = t => t.replace(/(현재\s*)?(거주\s*중|거주지|거주|살고\s*있음|살고\s*있어요|사는\s*곳|근무\s*중|근무지|근무|직장|출근|사무실)\s*[:：]?/g,'').replace(/\s+/g,' ').trim().replace(/(에서|에)$/,'').trim();
+  segs.forEach(sg => {
+    if(!LOC_REGION.test(sg)){ rest.push(sg); return; }
+    if(!home && /거주|사는\s*곳|살고/.test(sg)){ home = clean(sg); return; }
+    if(!work && /근무|직장|출근|사무실/.test(sg)){ work = clean(sg); return; }
+    rest.push(sg);
+  });
+  return { home, work, rest: rest.join(' / ') };
+}
+function locCandidates(){
+  return state.members.filter(m => !m.home && !m.work && m.intro).map(m => ({ m, g: locGuess(m.intro) })).filter(x => x.g.home || x.g.work);
+}
+function openLocMigrateModal(){
+  if(!isAdmin()) return;
+  const list = locCandidates();
+  openModal('설명란의 거주지·직장 옮기기', `
+    <p class="helper" style="margin-top:0;">'설명'에 <b>거주·근무 같은 말과 지역</b>이 함께 적힌 분만 골라 새 칸 값을 미리 채워뒀어요. 틀린 곳은 고친 뒤 체크한 분만 적용돼요. 못 찾은 분은 본인이 '내 정보 수정'에서 입력하면 돼요.</p>
+    ${list.length ? `
+    <label style="display:flex; gap:6px; align-items:center; font-size:13px; margin:6px 0;"><input type="checkbox" id="locCutIntro" checked> 옮긴 부분은 '설명'에서 지우기 (중복 표시 방지)</label>
+    <div id="locList">${list.map(({m,g},i)=>`
+      <div class="card" style="border:1px solid var(--line); margin-bottom:8px; padding:10px;">
+        <label style="display:flex; gap:6px; align-items:center; font-weight:800;"><input type="checkbox" class="locChk" data-id="${m.id}" checked> ${esc(m.name)}${m.batch ? ' · ' + esc(displayBatch(m.batch)) : ''}</label>
+        <div class="req-sub" style="margin:4px 0 6px;">설명: ${esc(m.intro)}</div>
+        <div class="row2">
+          <div class="field" style="margin:0;"><label>🏠 사는 곳</label><input class="locHome" data-id="${m.id}" maxlength="30" value="${esc(g.home)}"></div>
+          <div class="field" style="margin:0;"><label>💼 직장 위치</label><input class="locWork" data-id="${m.id}" maxlength="30" value="${esc(g.work)}"></div>
+        </div>
+      </div>`).join('')}</div>
+    <button class="btn btn-accent btn-block" onclick="applyLocMigrate()">체크한 분 적용</button>` : '<div class="empty" style="padding:20px 0;">옮길 만한 분이 없어요 👍</div>'}
+  `, true);
+}
+function applyLocMigrate(){
+  if(!isAdmin()) return;
+  const cut = document.getElementById('locCutIntro').checked;
+  let n = 0;
+  document.querySelectorAll('.locChk').forEach(chk => {
+    if(!chk.checked) return;
+    const id = chk.dataset.id, m = state.members.find(x => x.id === id); if(!m) return;
+    const home = document.querySelector('.locHome[data-id="'+id+'"]').value.trim().slice(0,30);
+    const work = document.querySelector('.locWork[data-id="'+id+'"]').value.trim().slice(0,30);
+    if(!home && !work) return;
+    m.home = home; m.work = work;
+    if(cut){
+      const g = locGuess(m.intro);
+      // 옮긴 항목만 설명에서 제거 (둘 중 하나만 옮겼다면 나머지 문구는 유지)
+      const segs = String(m.intro).split(/\s*(?:\/|,|·|;|\||\n)\s*/).map(x=>x.trim()).filter(Boolean);
+      const keep = segs.filter(sg => { const c = locGuess(sg); return !((c.home && home) || (c.work && work)); });
+      m.intro = keep.join(' / ');
+    }
+    n++;
+  });
+  if(!n){ showToast('옮길 분을 체크하고 지역을 확인해주세요'); return; }
+  saveMembers(); logActivity('거주지·직장 옮기기', n + '명');
+  closeModal(); renderAll(); showToast(n + '명의 사는 곳·직장을 옮겼어요');
+}
 async function openDupModal(){
   if(!isAdmin()) return;
   const groups = dupGroups();
