@@ -350,6 +350,13 @@ main#app{padding:16px 16px 4px;}
 .col-hint a{color:#1D4ED8; cursor:pointer; text-decoration:underline;}
 .entry-acts{display:flex; flex-direction:row; flex-wrap:wrap; row-gap:3px; gap:3px; align-items:center; justify-content:flex-end;}
 .entry-acts .btn{padding:3px 5px; font-size:11px; white-space:nowrap; flex:0 0 auto; border-radius:7px; line-height:1.2;}
+.install-bar{display:flex; align-items:center; gap:10px; margin:12px 16px 0; padding:10px 10px 10px 14px; background:#fff; border:1px solid var(--line); border-radius:14px; box-shadow:0 2px 8px rgba(19,35,63,.08);}
+.install-bar .ib-txt{flex:1; min-width:0; font-size:13px; line-height:1.4; color:var(--ink);}
+.install-bar .ib-txt b{display:block; font-size:14px;}
+.install-bar .ib-go{flex:0 0 auto; border:0; background:var(--ink); color:#fff; font-weight:800; font-size:13px; padding:9px 13px; border-radius:10px; cursor:pointer; white-space:nowrap;}
+.install-bar .ib-x{flex:0 0 auto; border:0; background:transparent; color:var(--ink-soft); font-size:16px; padding:6px 8px; cursor:pointer; line-height:1;}
+.ib-steps{margin:0; padding-left:20px; line-height:1.8; font-size:15px; color:var(--ink);}
+.ib-note{margin:12px 0 0; font-size:13px; color:var(--ink-soft); line-height:1.5;}
 </style>
 </head>
 <body>
@@ -364,6 +371,8 @@ main#app{padding:16px 16px 4px;}
       </div>
     </div>
   </div>
+
+  <div id="installBar"></div>
 
   <div class="session-row">
     <div id="msgBell"></div>
@@ -5155,6 +5164,62 @@ if('serviceWorker' in navigator){
     navigator.serviceWorker.register('sw.js').catch(()=>{});
   });
 }
+</script>
+<script>
+(function(){
+  var KEY='installBarHideUntil';
+  var ua=navigator.userAgent||'';
+  var isStandalone=(window.matchMedia&&window.matchMedia('(display-mode: standalone)').matches)||window.navigator.standalone===true;
+  var isIOS=/iPhone|iPad|iPod/i.test(ua);
+  var isAndroid=/Android/i.test(ua);
+  var isKakao=/KAKAOTALK/i.test(ua);
+  var isInApp=isKakao||/NAVER\(inapp|BAND\/|Instagram|FBAN|FBAV|Line\/|DaumApps/i.test(ua);
+  var dp=null;
+  function hiddenNow(){ try{ return Date.now() < (+localStorage.getItem(KEY)||0); }catch(e){ return false; } }
+  function hideFor(days){ try{ localStorage.setItem(KEY, String(Date.now()+days*864e5)); }catch(e){} render(); }
+  function guide(kind){
+    var html='';
+    if(kind==='ios'){
+      html='<ol class="ib-steps"><li>Safari 하단의 <b>공유 버튼</b>(□↑)을 누르세요</li><li><b>홈 화면에 추가</b>를 선택하세요</li><li>오른쪽 위 <b>추가</b>를 누르면 끝!</li></ol><p class="ib-note">설치하면 바탕화면 아이콘으로 바로 열려요.</p>';
+    }else if(kind==='inapp'){
+      html='<ol class="ib-steps"><li>화면의 <b>메뉴(⋮ 또는 ⋯)</b>를 누르세요</li><li><b>다른 브라우저로 열기</b>(Safari·Chrome)를 선택하세요</li><li>열린 화면에서 <b>앱 설치</b> 버튼을 누르세요</li></ol><p class="ib-note">카카오톡·밴드 안에서는 앱 설치가 막혀 있어요.</p>';
+    }else{
+      html='<ol class="ib-steps"><li>Chrome 오른쪽 위 <b>⋮ 메뉴</b>를 누르세요</li><li><b>설치 및 바로가기 만들기</b>를 선택하세요</li><li><b>설치</b>를 누르면 끝!</li></ol><p class="ib-note">설치하면 바탕화면 아이콘으로 바로 열려요.</p>';
+    }
+    if(typeof openModal==='function') openModal('앱으로 설치하기', html, true);
+  }
+  function openExternal(){
+    var url=location.href;
+    if(isKakao){ location.href='kakaotalk://web/openExternal?url='+encodeURIComponent(url); return; }
+    if(isAndroid){
+      location.href='intent://'+location.host+location.pathname+location.search+'#Intent;scheme=https;package=com.android.chrome;S.browser_fallback_url='+encodeURIComponent(url)+';end';
+      return;
+    }
+    guide('inapp');
+  }
+  function onGo(){
+    if(isInApp){ openExternal(); return; }
+    if(dp){
+      var e=dp; dp=null;
+      try{ e.prompt(); }catch(err){ guide(isIOS?'ios':'android'); }
+      render(); return;
+    }
+    guide(isIOS?'ios':'android');
+  }
+  function render(){
+    var el=document.getElementById('installBar'); if(!el) return;
+    var show=!isStandalone&&!hiddenNow()&&(isIOS||isAndroid||isInApp||!!dp);
+    if(!show){ el.innerHTML=''; return; }
+    var sub=isInApp?'카톡 안에서는 설치가 안 돼요. 브라우저로 열어주세요':'바탕화면 아이콘으로 바로 열 수 있어요';
+    el.innerHTML='<div class="install-bar"><div class="ib-txt"><b>📲 앱으로 설치하기</b>'+sub+'</div>'+
+      '<button class="ib-go" type="button" onclick="window._ibGo()">'+(isInApp?'브라우저로 열기':'앱 설치')+'</button>'+
+      '<button class="ib-x" type="button" aria-label="닫기" onclick="window._ibHide()">✕</button></div>';
+  }
+  window._ibGo=onGo; window._ibHide=function(){ hideFor(7); };
+  window.addEventListener('beforeinstallprompt', function(e){ e.preventDefault(); dp=e; render(); });
+  window.addEventListener('appinstalled', function(){ isStandalone=true; render(); });
+  if(document.readyState==='loading') document.addEventListener('DOMContentLoaded', render); else render();
+})();
 </script>
 </body>
 </html>
