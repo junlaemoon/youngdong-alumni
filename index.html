@@ -426,6 +426,7 @@ let state = {
   requests: [],
   posts: [],
   deals: [],
+  applications: [],    // 외부 가입 신청(관리자 승인 대기) — meta/applications 문서에 저장
   features: { deals: false },
   session: null,       // {memberId}
   tab: 'notice',
@@ -691,6 +692,13 @@ async function init(){
     }, () => {});
   }catch(e){}
   try{
+    db.collection('meta').doc('applications').onSnapshot(d => {
+      const data = d.exists ? (d.data() || {}) : {};
+      state.applications = Object.keys(data).map(k => data[k]).filter(a => a && a.id).sort((a,b) => (b.createdAt||0) - (a.createdAt||0));
+      if(state.loaded){ renderAdminBell(); if(!modalIsOpen()) renderApp(); else { const h = document.querySelector('#modal-root .modal-head h2'); if(h && h.textContent === '외부 가입 신청') openApplicationsModal(); } }
+    }, () => {});
+  }catch(e){}
+  try{
     db.collection('meta').doc('texts').onSnapshot(d => {
       state.texts = d.exists ? (d.data() || {}) : {};
       applyHeaderTexts();
@@ -784,6 +792,10 @@ async function doRegister(name, intro, batch, phone, pin, hint, home, work){
     showToast('이미 등록된 연락처예요. 로그인을 이용해주세요');
     return;
   }
+  if((state.applications || []).some(a => a.phone === phone && a.status !== 'rejected')){
+    showToast('이 번호로 외부 가입 신청이 진행 중이에요. 승인을 기다려주세요');
+    return;
+  }
   const same = state.members.filter(m => dupKey(m) === dupKey({ name, batch }));
   if(same.length){
     const ok = confirm(`이미 같은 이름·기수(${name}${batch.trim() ? ' · ' + batchNumber(batch) + '회' : ''})로 가입된 분이 있어요.\n\n· 본인이라면 [취소]를 누르고 로그인해주세요. (번호가 바뀌었거나 PIN을 잊었다면 운영진에게 문의)\n· 이름·기수가 같은 다른 분(동명이인)이 맞다면 [확인]을 눌러 계속 가입하세요.\n\n본인인데도 [확인]을 누르면 중복 가입으로 운영진에게 표시돼요.`);
@@ -830,7 +842,12 @@ async function doRegister(name, intro, batch, phone, pin, hint, home, work){
 function doLogin(phone, pin){
   phone = normalizePhone(phone);
   const m = state.members.find(x => x.phone === phone && x.pin === pin);
-  if(!m){ showToast('휴대폰 번호 또는 PIN이 일치하지 않아요'); return; }
+  if(!m){
+    const ap = (state.applications || []).find(x => x.phone === phone && x.pin === pin);
+    if(ap && ap.status === 'rejected'){ alert(`외부 가입 신청이 승인되지 않았어요.${ap.rejectReason ? '\n\n사유: ' + ap.rejectReason : ''}\n\n문의가 필요하시면 소개해주신 동문 또는 운영진에게 연락해주세요.`); return; }
+    if(ap){ alert('외부 가입 신청이 아직 승인 대기 중이에요.\n\n운영진이 소개자 확인 후 승인하면 같은 번호·PIN으로 로그인할 수 있어요. (보통 1~3일)'); return; }
+    showToast('휴대폰 번호 또는 PIN이 일치하지 않아요'); return;
+  }
   state.session = { memberId: m.id };
   saveSession();
   closeModal();
@@ -2229,11 +2246,166 @@ function openPolicyModal(){
     </div>
   `, true);
 }
+/* ---------------------------------------------------------
+   외부 가입 (동문이 아닌 분): 소개자 + 목적 + 서약을 받고 관리자 승인 후에만 가입 처리
+   신청서는 meta/applications 문서에 보관하고, 승인하면 members에 type:'external'로 등록
+--------------------------------------------------------- */
+const EXT_RELATIONS = ['동문의 가족·배우자', '동문의 지인·사업 파트너', '영동고 전·현직 교직원', '동문회 후원·협력 기관 관계자', '기타'];
+const EXT_PURPOSES = ['동문 모임·행사 참여', '동문 사업체 이용·제휴', '동문회 후원·협력', '소식·정보 열람', '기타'];
+function externalFormHtml(){
+  return `
+    <div class="card" style="background:#FFF7E8; border-color:#F0DCA8; margin-bottom:12px;">
+      <p style="margin:0 0 6px; font-weight:800; font-size:14px;">외부 가입은 이렇게 진행돼요</p>
+      <p class="helper" style="margin:0; line-height:1.6;">동문이 아닌 분은 <b>동문의 소개</b>가 있어야 가입할 수 있어요. 신청하시면 운영진이 소개해주신 동문께 확인한 뒤 <b>승인</b>해요 (보통 1~3일). 승인 전에는 로그인할 수 없어요.</p>
+    </div>
+    <div class="field"><label>이름 (본명)</label><input id="exName" placeholder="예: 김영희"></div>
+    <div class="field"><label>소속 · 하는 일</label><input id="exIntro" maxlength="60" placeholder="예: OO병원 간호사 / OO회사 대표"></div>
+    <div class="row2">
+      <div class="field"><label>🏠 사는 곳 <span class="helper">(선택)</span></label><input id="exHome" maxlength="30" placeholder="${LOC_PH_HOME}"></div>
+      <div class="field"><label>💼 직장 위치 <span class="helper">(선택)</span></label><input id="exWork" maxlength="30" placeholder="${LOC_PH_WORK}"></div>
+    </div>
+    <div class="field"><label>휴대폰 번호 (- 없이 숫자만)</label><input id="exPhone" placeholder="01012345678" inputmode="tel" maxlength="11"></div>
+    <div class="row2">
+      <div class="field"><label>PIN (4자리)</label><input id="exPin" inputmode="numeric" maxlength="4" placeholder="0000"></div>
+      <div class="field"><label>PIN 복구용 답</label><input id="exHint" maxlength="30" placeholder="예: 첫 직장 이름"></div>
+    </div>
+    <p class="section-title" style="margin:14px 0 6px;">소개 · 목적</p>
+    <div class="field"><label>영동고와의 관계</label><select id="exRelation"><option value="">선택해주세요</option>${EXT_RELATIONS.map(r => `<option>${r}</option>`).join('')}</select></div>
+    <div class="field"><label>가입 목적</label><select id="exPurpose"><option value="">선택해주세요</option>${EXT_PURPOSES.map(r => `<option>${r}</option>`).join('')}</select></div>
+    <div class="field"><label>구체적으로 어떻게 활동하실 계획인가요? (20자 이상)</label><textarea id="exDetail" rows="3" maxlength="300" placeholder="예: 동기 OO의 배우자로 가족 동반 행사에 참여하고 싶어요"></textarea></div>
+    <div class="field"><label>소개해주신 동문 이름</label><input id="exRefName" maxlength="20" placeholder="예: 홍제선"></div>
+    <div class="row2">
+      <div class="field"><label>소개 동문 기수</label><input id="exRefBatch" inputmode="numeric" maxlength="3" placeholder="예: 10" oninput="this.value=this.value.replace(/[^0-9]/g,'')"></div>
+      <div class="field"><label>소개 동문 휴대폰 뒤 4자리</label><input id="exRefPhone" inputmode="numeric" maxlength="4" placeholder="1234" oninput="this.value=this.value.replace(/[^0-9]/g,'')"></div>
+    </div>
+    <div class="field"><label>이 앱을 어떻게 알게 되셨나요? <span class="helper">(선택)</span></label><input id="exHow" maxlength="60" placeholder="예: 소개 동문이 단톡방 링크를 보내줌"></div>
+    <p class="section-title" style="margin:14px 0 6px;">⚠ 이용 전 꼭 확인해주세요</p>
+    <div class="card" style="margin-bottom:8px;">
+      <label style="display:flex; gap:8px; align-items:flex-start; font-size:13px; line-height:1.5; margin-bottom:8px;"><input type="checkbox" id="exAgree1" style="width:auto; margin-top:3px;"> 동문의 연락처 등 개인정보를 <b>무단으로 수집·저장·외부에 공유하지 않겠습니다.</b></label>
+      <label style="display:flex; gap:8px; align-items:flex-start; font-size:13px; line-height:1.5; margin-bottom:8px;"><input type="checkbox" id="exAgree2" style="width:auto; margin-top:3px;"> 허락 없는 <b>광고·영업·권유, 정치·종교 활동을 하지 않겠습니다.</b> (사업 안내는 운영진이 허용한 곳에서만 합니다)</label>
+      <label style="display:flex; gap:8px; align-items:flex-start; font-size:13px; line-height:1.5;"><input type="checkbox" id="exAgree3" style="width:auto; margin-top:3px;"> 적은 내용이 사실이며, 운영진이 <b>소개 동문께 확인</b>하는 데 동의합니다. 허위이거나 위 약속을 어기면 <b>승인 취소·탈퇴</b>될 수 있음을 확인했어요.</label>
+    </div>
+    <p class="helper">외부 회원은 가입 후에도 '외부 회원'으로 표시되고, 다른 동문의 연락처는 상대방이 수락해야만 볼 수 있어요.</p>
+    <button class="btn btn-accent btn-block" onclick="submitExternalApplication()">가입 신청하기</button>
+  `;
+}
+async function submitExternalApplication(){
+  const v = id => (document.getElementById(id) ? document.getElementById(id).value : '').trim();
+  const name = v('exName'), intro = v('exIntro'), phone = normalizePhone(v('exPhone')), pin = v('exPin'), hint = v('exHint');
+  const relation = v('exRelation'), purpose = v('exPurpose'), detail = v('exDetail');
+  const refName = v('exRefName'), refBatch = v('exRefBatch'), refPhone4 = v('exRefPhone').replace(/\D/g,'');
+  const how = v('exHow');
+  const miss = [];
+  if(!name) miss.push('이름'); if(!intro) miss.push('소속·하는 일');
+  if(!/^\d{9,11}$/.test(phone)) miss.push('휴대폰 번호'); if(!/^\d{4}$/.test(pin)) miss.push('PIN 4자리'); if(!hint) miss.push('PIN 복구용 답');
+  if(!relation) miss.push('영동고와의 관계'); if(!purpose) miss.push('가입 목적');
+  if(detail.length < 20) miss.push('활동 계획(20자 이상)');
+  if(!refName) miss.push('소개 동문 이름'); if(!refBatch) miss.push('소개 동문 기수'); if(!/^\d{4}$/.test(refPhone4)) miss.push('소개 동문 휴대폰 뒤 4자리');
+  if(miss.length){ showToast('확인해주세요: ' + miss.join(', ')); return; }
+  if(!['exAgree1','exAgree2','exAgree3'].every(id => document.getElementById(id).checked)){ showToast('주의사항 3가지에 모두 동의해주세요'); return; }
+  if(state.members.some(m => m.phone === phone)){ showToast('이미 가입된 번호예요. 로그인을 이용해주세요'); return; }
+  const old = (state.applications || []).find(a => a.phone === phone);
+  if(old && old.status !== 'rejected'){ showToast('이미 신청하셨어요. 승인을 기다려주세요'); return; }
+  const ref = state.members.find(m => normName(m.name) === normName(refName) && String(batchNumber(m.batch)) === String(Number(refBatch)));
+  const app = {
+    id: uid(), status: 'pending', createdAt: Date.now(), joinedAt: ymd(new Date()),
+    name, intro: intro.slice(0,60), home: v('exHome').slice(0,30), work: v('exWork').slice(0,30),
+    phone, pin, hint, relation, purpose, detail: detail.slice(0,300),
+    refName, refBatch: String(Number(refBatch)), refPhone4,
+    refMemberId: ref ? ref.id : '',
+    refPhoneOk: !!(ref && String(ref.phone || '').slice(-4) === refPhone4),
+    how: how.slice(0,60), agreed: true,
+  };
+  try{
+    const upd = { [app.id]: app };
+    if(old) upd[old.id] = firebase.firestore.FieldValue.delete();
+    await db.collection('meta').doc('applications').set(upd, { merge: true });
+  }catch(e){ console.error(e); showToast('신청 중 오류가 발생했어요. 다시 시도해주세요'); return; }
+  closeModal();
+  openModal('신청이 접수됐어요', `
+    <div style="text-align:center; padding:6px 0 4px;">
+      <div style="font-size:40px;">📨</div>
+      <p style="font-weight:800; font-size:16px; margin:8px 0;">${esc(name)}님, 가입 신청 완료!</p>
+      <p class="helper" style="line-height:1.7;">운영진이 소개해주신 <b>${esc(refName)}</b> 동문께 확인한 뒤 승인해요.<br>승인되면 방금 입력한 <b>휴대폰 번호와 PIN</b>으로 로그인할 수 있어요. (보통 1~3일)</p>
+    </div>
+    <button class="btn btn-accent btn-block" onclick="closeModal()">확인</button>
+  `, true);
+}
+function pendingApps(){ return (state.applications || []).filter(a => a.status === 'pending'); }
+function openApplicationsModal(){
+  if(!isAdmin() && !canManageMembers()){ return; }
+  const list = state.applications || [];
+  const card = a => {
+    const refM = a.refMemberId ? state.members.find(m => m.id === a.refMemberId) : null;
+    const refLine = refM
+      ? (a.refPhoneOk ? `<span style="color:#15803D; font-weight:700;">✅ 소개 동문 일치 (이름·기수·전화 뒤 4자리)</span>` : `<span style="color:#B45309; font-weight:700;">⚠ 이름·기수는 일치하나 전화 뒤 4자리가 달라요</span>`)
+      : `<span style="color:#B91C1C; font-weight:700;">❌ 이 이름·기수의 가입 동문을 찾지 못했어요</span>`;
+    return `
+    <div class="card" style="margin-bottom:10px;">
+      <p style="margin:0 0 4px; font-weight:800; font-size:15px;">${esc(a.name)} <span class="pill">${a.status === 'rejected' ? '반려됨' : '승인 대기'}</span></p>
+      <p class="req-sub" style="margin:0 0 8px;">신청 ${esc(a.joinedAt)} · ${esc(maskPhone(a.phone))}</p>
+      <div class="req-row"><span class="req-sub">소속·하는 일</span><span class="req-name">${esc(a.intro)}</span></div>
+      <div class="req-row"><span class="req-sub">사는 곳 / 직장</span><span class="req-name">${esc(a.home || '-')} / ${esc(a.work || '-')}</span></div>
+      <div class="req-row"><span class="req-sub">영동고와의 관계</span><span class="req-name">${esc(a.relation)}</span></div>
+      <div class="req-row"><span class="req-sub">가입 목적</span><span class="req-name">${esc(a.purpose)}</span></div>
+      <div class="req-row"><span class="req-sub">활동 계획</span><span class="req-name" style="white-space:pre-wrap;">${esc(a.detail)}</span></div>
+      <div class="req-row"><span class="req-sub">소개 동문</span><span class="req-name">${esc(a.refName)} · ${esc(a.refBatch)}회 (뒤 ${esc(a.refPhone4)})</span></div>
+      <div class="req-row"><span class="req-sub">소개자 확인</span><span class="req-name">${refLine}</span></div>
+      ${a.how ? `<div class="req-row"><span class="req-sub">알게 된 경로</span><span class="req-name">${esc(a.how)}</span></div>` : ''}
+      ${a.status === 'rejected' ? `<p class="helper">반려 사유: ${esc(a.rejectReason || '-')}</p>` : ''}
+      <div style="display:flex; gap:8px; margin-top:10px; flex-wrap:wrap;">
+        ${a.status === 'pending' ? `<button class="btn btn-accent btn-sm" onclick="approveApplication('${a.id}')">승인</button><button class="btn btn-coral btn-sm" onclick="rejectApplication('${a.id}')">반려</button>` : ''}
+        ${refM ? `<button class="btn btn-ghost btn-sm" onclick="closeModal(); openMsgThread('${refM.id}')">✉ 소개 동문께 쪽지</button>` : ''}
+        ${a.status === 'rejected' ? `<button class="btn btn-ghost btn-sm" onclick="deleteApplication('${a.id}')">기록 삭제</button>` : ''}
+      </div>
+    </div>`;
+  };
+  const html = `<p class="helper" style="margin-top:0;">소개 동문에게 쪽지·전화로 <b>실제 소개했는지</b> 확인한 뒤 승인해주세요. 승인하면 '외부 회원'으로 등록돼요.</p>` +
+    (list.length ? list.map(card).join('') : '<div class="empty">신청 내역이 없어요</div>');
+  openModal('외부 가입 신청', html);
+}
+async function approveApplication(id){
+  const a = (state.applications || []).find(x => x.id === id); if(!a) return;
+  if(state.members.some(m => m.phone === a.phone)){ showToast('이미 가입된 번호예요. 신청을 반려해주세요'); return; }
+  if(!confirm(`${a.name}님을 외부 회원으로 승인할까요?\n\n소개 동문(${a.refName} ${a.refBatch}회)께 확인하셨나요?`)) return;
+  const me = currentMember();
+  const member = {
+    id: uid(), name: a.name, intro: a.intro, home: a.home || '', work: a.work || '', batch: '',
+    phone: a.phone, pin: a.pin, hint: a.hint, role: 'member', joinedAt: ymd(new Date()),
+    type: 'external', extRelation: a.relation, extPurpose: a.purpose, extDetail: a.detail,
+    refName: a.refName, refBatch: a.refBatch, refMemberId: a.refMemberId || '',
+    approvedAt: ymd(new Date()), approvedBy: me ? me.name : '',
+  };
+  state.members.push(member);
+  try{
+    await saveMembers();
+    await db.collection('meta').doc('applications').set({ [id]: firebase.firestore.FieldValue.delete() }, { merge: true });
+  }catch(e){ console.error(e); showToast('승인 처리 중 오류가 발생했어요'); return; }
+  logActivity('외부 회원 승인', `${a.name} (소개: ${a.refName} ${a.refBatch}회)`);
+  showToast(`${a.name}님을 승인했어요`);
+  renderAll();
+}
+async function rejectApplication(id){
+  const a = (state.applications || []).find(x => x.id === id); if(!a) return;
+  const reason = prompt(`${a.name}님 신청을 반려할까요?\n신청자에게 보여줄 사유를 적어주세요 (선택)`, '');
+  if(reason === null) return;
+  try{
+    await db.collection('meta').doc('applications').set({ [id]: Object.assign({}, a, { status: 'rejected', rejectReason: reason.trim().slice(0,100) }) }, { merge: true });
+  }catch(e){ console.error(e); showToast('처리 중 오류가 발생했어요'); return; }
+  logActivity('외부 가입 반려', a.name);
+  showToast('반려했어요');
+}
+async function deleteApplication(id){
+  if(!confirm('이 기록을 삭제할까요?')) return;
+  try{ await db.collection('meta').doc('applications').set({ [id]: firebase.firestore.FieldValue.delete() }, { merge: true }); }catch(e){ showToast('삭제 실패'); }
+}
+function isExternal(m){ return !!m && m.type === 'external'; }
 function openAuthModal(){
   openModal('로그인 / 가입', `
     <div class="auth-toggle">
       <button class="btn btn-primary btn-block" id="authTabLogin" onclick="switchAuthTab('login')">로그인</button>
-      <button class="btn btn-ghost btn-block" id="authTabRegister" onclick="switchAuthTab('register')">처음이에요</button>
+      <button class="btn btn-ghost btn-block" id="authTabRegister" onclick="switchAuthTab('register')">동문 가입</button>
+      <button class="btn btn-ghost btn-block" id="authTabExternal" onclick="switchAuthTab('external')">외부 가입</button>
     </div>
     <div id="authBody"></div>
   `);
@@ -2242,6 +2414,7 @@ function openAuthModal(){
 function switchAuthTab(which){
   document.getElementById('authTabLogin').className = 'btn btn-block ' + (which==='login' ? 'btn-primary' : 'btn-ghost');
   document.getElementById('authTabRegister').className = 'btn btn-block ' + (which==='register' ? 'btn-primary' : 'btn-ghost');
+  document.getElementById('authTabExternal').className = 'btn btn-block ' + (which==='external' ? 'btn-primary' : 'btn-ghost');
   const body = document.getElementById('authBody');
   if(which === 'login'){
     body.innerHTML = `
@@ -2259,6 +2432,8 @@ function switchAuthTab(which){
       <p class="helper">가입할 때 등록한 힌트 답이 일치해야 해요. 기억나지 않으면 관리자에게 문의해주세요.</p>
       <button class="link-btn" style="margin-top:10px; display:block;" onclick="switchAuthTab('login')">‹ 로그인으로 돌아가기</button>
     `;
+  } else if(which === 'external'){
+    body.innerHTML = externalFormHtml();
   } else {
     body.innerHTML = `
       <div class="field"><label>이름 (본명만 입력해주세요)</label><input id="regName" placeholder="예: 문준래"></div>
@@ -2506,6 +2681,11 @@ function openMemberProfileModal(memberId){
       <div class="req-row"><span class="req-sub">사는 곳 / 직장</span><span class="req-name">${esc(m.home || '-')} / ${esc(m.work || '-')}</span></div>
       <div class="req-row"><span class="req-sub">가장 기억에 남는 은사님</span><span class="req-name">${m.hint || '-'}</span></div>
       <div class="req-row"><span class="req-sub">가입일</span><span class="req-name">${m.joinedAt}</span></div>
+      ${isExternal(m) ? `
+      <div class="req-row"><span class="req-sub">소개 동문</span><span class="req-name">${esc(m.refName || '-')} · ${esc(m.refBatch || '-')}회</span></div>
+      <div class="req-row"><span class="req-sub">관계 / 목적</span><span class="req-name">${esc(m.extRelation || '-')} / ${esc(m.extPurpose || '-')}</span></div>
+      <div class="req-row"><span class="req-sub">활동 계획</span><span class="req-name" style="white-space:pre-wrap;">${esc(m.extDetail || '-')}</span></div>
+      <div class="req-row"><span class="req-sub">승인</span><span class="req-name">${esc(m.approvedAt || '-')} · ${esc(m.approvedBy || '-')}</span></div>` : ''}
     </div>
   ` : '';
   const editOthersBtn = (canEditOthersInfo() && me && me.id !== memberId) ? `<button class="btn btn-ghost btn-block" onclick="openEditProfileModal('${memberId}')">이 동문 정보 수정</button>` : '';
@@ -2516,7 +2696,7 @@ function openMemberProfileModal(memberId){
       ${locLine(m) ? `<p class="profile-phone" style="margin-top:2px;">${locLine(m)}</p>` : ''}
       <div class="tag-row">
         <span class="pill">가입일 ${m.joinedAt}</span>
-        <span class="pill">${m.role==='admin' ? '플랫폼관리자' : '동문'}</span>${m.isCreator ? '<span class="pill" style="background:#B8860B; color:#fff;">🛠 플랫폼 제작자</span>' : ''}
+        <span class="pill">${m.role==='admin' ? '플랫폼관리자' : (isExternal(m) ? '외부 회원' : '동문')}</span>${m.isCreator ? '<span class="pill" style="background:#B8860B; color:#fff;">🛠 플랫폼 제작자</span>' : ''}
       </div>
     </div>
   `+`
@@ -4061,7 +4241,7 @@ function renderAdminBell(){
   if(!el) return;
   if(!isAdmin()){ el.innerHTML = ''; return; }
   const { newMembers, newMeetups, newNotices, newPosts, newParticipants } = collectNewItems();
-  const total = newMembers.length + newMeetups.length + newNotices.length + newPosts.length + newParticipants.length;
+  const total = newMembers.length + newMeetups.length + newNotices.length + newPosts.length + newParticipants.length + pendingApps().length;
   el.innerHTML = `
     <div class="admin-bell" onclick="openAdminNotificationsModal()">
       🔔${total > 0 ? `<span class="badge-count">${total > 99 ? '99+' : total}</span>` : ''}
@@ -4075,7 +4255,8 @@ function openAdminNotificationsModal(){
     ${items.map(renderItem).join('')}
   ` : '';
   openModal('새 소식 알림', `
-    ${(newMembers.length+newMeetups.length+newNotices.length+newPosts.length+newParticipants.length)===0 ? '<div class="empty">새로운 소식이 없어요</div>' : ''}
+    ${(newMembers.length+newMeetups.length+newNotices.length+newPosts.length+newParticipants.length+pendingApps().length)===0 ? '<div class="empty">새로운 소식이 없어요</div>' : ''}
+    ${pendingApps().length ? `<button class="btn btn-accent btn-block" style="margin-bottom:10px;" onclick="closeModal(); openApplicationsModal()">🌐 외부 가입 승인 대기 ${pendingApps().length}건 확인하기</button>` : ''}
     ${section('신규 가입자', newMembers, m => `<div class="req-row"><span class="req-name">${m.name}${m.batch?' · '+displayBatch(m.batch):''}</span><span class="req-sub">${m.joinedAt}</span></div>`)}
     ${section('신규 모임', newMeetups, mt => `<div class="req-row" style="cursor:pointer;" onclick="closeModal(); openMeetupDetailModal('${mt.id}')"><span class="req-name">${mt.title}</span><span class="req-sub">${fmtDateKR(mt.date)}</span></div>`)}
     ${section('신규 공지', newNotices, n => `<div class="req-row" style="cursor:pointer;" onclick="closeModal(); openNoticeDetailModal('${n.id}')"><span class="req-name">${n.title}</span><span class="req-sub">${n.date}</span></div>`)}
@@ -4678,7 +4859,7 @@ function renderMemberList(){
   return countLine + list.map(m => `
         <div class="member-row">
           <span style="cursor:pointer;" onclick="openMemberProfileModal('${m.id}')">
-            <span class="member-name">${m.name}${m.batch ? ` · ${displayBatch(m.batch)}` : ''}${m.title ? `<span class="role-badge" style="background:var(--river);">${m.title}</span>` : ''}${m.role==='admin' ? '<span class="role-badge">플랫폼관리자</span>' : ''}${m.isCreator ? '<span class="role-badge" style="background:#B8860B;">🛠 플랫폼 제작자</span>' : ''}</span>
+            <span class="member-name">${m.name}${m.batch ? ` · ${displayBatch(m.batch)}` : ''}${m.title ? `<span class="role-badge" style="background:var(--river);">${m.title}</span>` : ''}${m.role==='admin' ? '<span class="role-badge">플랫폼관리자</span>' : ''}${isExternal(m) ? '<span class="role-badge" style="background:#6B7280;">외부 회원</span>' : ''}${m.isCreator ? '<span class="role-badge" style="background:#B8860B;">🛠 플랫폼 제작자</span>' : ''}</span>
             ${m.intro ? `<div class="req-sub" style="margin-top:2px;">${m.intro}</div>` : ''}
             ${locLine(m) ? `<div class="req-sub" style="margin-top:2px;">${locLine(m)}</div>` : ''}
           </span>
@@ -4886,7 +5067,7 @@ function renderMembersTab(){
   const pendingCount = state.meetups.filter(mt => mt.status === 'pending').length;
   return `
     <div class="card">
-      <h3>동문 ${state.members.length}명</h3>
+      <h3>동문 ${state.members.filter(m => !isExternal(m)).length}명${state.members.some(isExternal) ? ` <span class="req-sub" style="font-weight:600;">· 외부 회원 ${state.members.filter(isExternal).length}명</span>` : ''}</h3>
       <p class="meetup-meta">${TXH('membersSub')}${txPen('membersSub')}</p>
     </div>
     ${admin ? `
@@ -4904,6 +5085,7 @@ function renderMembersTab(){
     <button class="btn btn-accent btn-block" onclick="togglePreview()">👁 일반 회원 화면으로 보기 (캡처용 · 관리자 정보 숨김)</button>
     ${backupReminder}
     ${pendingCount ? `<button class="btn btn-accent btn-block" onclick="openPendingMeetupsModal()">🕓 승인 대기 모임 (${pendingCount})</button>` : ''}
+    <button class="btn ${pendingApps().length ? 'btn-accent' : 'btn-ghost'} btn-block" onclick="openApplicationsModal()">🌐 외부 가입 신청${pendingApps().length ? ` (대기 ${pendingApps().length})` : ''}</button>
     <button class="btn btn-ghost btn-block" onclick="exportYearlyReport()">📊 연간 리포트 엑셀 다운로드</button>
     <button class="btn btn-ghost btn-block" onclick="exportAllData()">⬇ 전체 데이터 백업(내보내기)</button>
     <button class="btn btn-accent btn-block" onclick="openTextManager()">✏️ 앱 문구·설정 관리 (메뉴 이름, 업체 박스, 안내 문구)</button>
