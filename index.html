@@ -582,6 +582,15 @@ const db = firebase.firestore();
 // 마지막으로 Firestore와 동기화된 상태의 스냅샷 (변경분만 골라 쓰기 위한 캐시)
 const fsCache = { members: {}, notices: {}, meetups: {}, requests: {}, posts: {}, deals: {} };
 
+// 보안: DB에 어떤 값이 들어 있어도 화면에서 코드로 실행되지 않도록, 불러온 글자 속 < > 를 전각(＜＞)으로 바꿈
+// (공지·소식 본문 'content'는 별도의 허용목록 방식 sanitizeRich로 처리)
+function neutralize(v, skipKey){
+  if(typeof v === 'string') return v.replace(/</g, '\uFF1C').replace(/>/g, '\uFF1E');
+  if(Array.isArray(v)){ for(let i = 0; i < v.length; i++) v[i] = neutralize(v[i]); return v; }
+  if(v && typeof v === 'object'){ for(const k in v){ if(k === skipKey) continue; v[k] = neutralize(v[k]); } return v; }
+  return v;
+}
+const RICH_COLLECTIONS = { notices: 'content', posts: 'content' };
 async function loadCollection(name, orderByField, limitN){
   let ref = db.collection(name);
   if(orderByField) ref = ref.orderBy(orderByField, 'desc');
@@ -589,7 +598,7 @@ async function loadCollection(name, orderByField, limitN){
   const snap = await ref.get();
   const arr = [];
   snap.forEach(doc => {
-    const data = { id: doc.id, ...doc.data() };
+    const data = neutralize({ id: doc.id, ...doc.data() }, RICH_COLLECTIONS[name]);
     arr.push(data);
     fsCache[name][doc.id] = JSON.parse(JSON.stringify(data));
   });
@@ -646,7 +655,7 @@ function attachLiveCollection(name, orderByField, limitN, onUpdate){
     const arr = [];
     fsCache[name] = {};
     snap.forEach(doc => {
-      const data = { id: doc.id, ...doc.data() };
+      const data = neutralize({ id: doc.id, ...doc.data() }, RICH_COLLECTIONS[name]);
       arr.push(data);
       fsCache[name][doc.id] = JSON.parse(JSON.stringify(data));
     });
@@ -694,7 +703,7 @@ async function init(){
   try{
     db.collection('meta').doc('applications').onSnapshot(d => {
       const data = d.exists ? (d.data() || {}) : {};
-      state.applications = Object.keys(data).map(k => data[k]).filter(a => a && a.id).sort((a,b) => (b.createdAt||0) - (a.createdAt||0));
+      state.applications = Object.keys(data).map(k => neutralize(data[k])).filter(a => a && a.id).sort((a,b) => (b.createdAt||0) - (a.createdAt||0));
       if(state.loaded){ renderAdminBell(); if(!modalIsOpen()) renderApp(); else { const h = document.querySelector('#modal-root .modal-head h2'); if(h && h.textContent === '외부 가입 신청') openApplicationsModal(); } }
     }, () => {});
   }catch(e){}
@@ -839,15 +848,36 @@ async function doRegister(name, intro, batch, phone, pin, hint, home, work){
   showToast(member.role === 'admin' ? '첫 가입자는 자동으로 플랫폼관리자가 됐어요' : `${name}님, 환영해요!`);
   renderAll();
 }
+// 보안: 로그인·PIN 복구를 연달아 틀리면 잠시 막음 (기기 기준 · 무작위 대입 방지용 최소 장치)
+function authLocked(){
+  try{
+    const o = JSON.parse(localStorage.getItem('rc_authfail') || '{}');
+    if(o.until && Date.now() < o.until){
+      showToast(`시도가 너무 많아요. ${Math.ceil((o.until - Date.now()) / 60000)}분 뒤에 다시 해주세요`);
+      return true;
+    }
+  }catch(e){}
+  return false;
+}
+function authFailed(){
+  try{
+    const o = JSON.parse(localStorage.getItem('rc_authfail') || '{}');
+    const n = (o.until && Date.now() >= o.until ? 0 : (o.n || 0)) + 1;
+    localStorage.setItem('rc_authfail', JSON.stringify(n >= 5 ? { n: 0, until: Date.now() + 5 * 60000 } : { n }));
+  }catch(e){}
+}
+function authOk(){ try{ localStorage.removeItem('rc_authfail'); }catch(e){} }
 function doLogin(phone, pin){
+  if(authLocked()) return;
   phone = normalizePhone(phone);
   const m = state.members.find(x => x.phone === phone && x.pin === pin);
   if(!m){
     const ap = (state.applications || []).find(x => x.phone === phone && x.pin === pin);
     if(ap && ap.status === 'rejected'){ alert(`외부 가입 신청이 승인되지 않았어요.${ap.rejectReason ? '\n\n사유: ' + ap.rejectReason : ''}\n\n문의가 필요하시면 소개해주신 동문 또는 운영진에게 연락해주세요.`); return; }
     if(ap){ alert('외부 가입 신청이 아직 승인 대기 중이에요.\n\n운영진이 소개자 확인 후 승인하면 같은 번호·PIN으로 로그인할 수 있어요. (보통 1~3일)'); return; }
-    showToast('휴대폰 번호 또는 PIN이 일치하지 않아요'); return;
+    authFailed(); showToast('휴대폰 번호 또는 PIN이 일치하지 않아요'); return;
   }
+  authOk();
   state.session = { memberId: m.id };
   saveSession();
   closeModal();
@@ -866,12 +896,14 @@ function requireLogin(){
   return true;
 }
 function recoverWithHint(phone, hintAnswer, newPin){
+  if(authLocked()) return;
   phone = normalizePhone(phone);
   hintAnswer = hintAnswer.trim();
   if(!phone || !hintAnswer){ showToast('휴대폰 번호와 힌트 답을 입력해주세요'); return; }
   if(!/^\d{4}$/.test(newPin)){ showToast('새 PIN은 4자리 숫자여야 해요'); return; }
   const m = state.members.find(x => x.phone === phone && x.hint && x.hint.replace(/\s/g,'') === hintAnswer.replace(/\s/g,''));
-  if(!m){ showToast('휴대폰 번호 또는 힌트 답이 일치하지 않아요'); return; }
+  if(!m){ authFailed(); showToast('휴대폰 번호 또는 힌트 답이 일치하지 않아요'); return; }
+  authOk();
   m.pin = newPin;
   saveMembers();
   state.session = { memberId: m.id };
@@ -907,16 +939,16 @@ function openEditProfileModal(targetId){
   if(!me) return;
   openModal(isSelf ? '내 정보 수정' : `${me.name} 님 정보 수정`, `
     <input type="hidden" id="editTargetId" value="${me.id}">
-    <div class="field"><label>이름 (본명만, 직책·소속은 아래 설명란에)</label><input id="editName" value="${me.name}"></div>
+    <div class="field"><label>이름 (본명만, 직책·소속은 아래 설명란에)</label><input id="editName" value="${esc(me.name)}"></div>
     <div class="field"><label>설명 (소속 · 하는 일 등)</label><input id="editIntro" value="${esc(me.intro||'')}"></div>
     <div class="row2">
       <div class="field"><label>🏠 사는 곳</label><input id="editHome" maxlength="30" value="${esc(me.home||'')}" placeholder="${LOC_PH_HOME}"></div>
       <div class="field"><label>💼 직장 위치</label><input id="editWork" maxlength="30" value="${esc(me.work||'')}" placeholder="${LOC_PH_WORK}"></div>
     </div>
     <p class="helper" style="margin-top:-6px;">${LOC_HELP}</p>
-    <div class="field"><label>기수</label><input id="editBatch" value="${me.batch||''}" inputmode="numeric" maxlength="3" oninput="this.value=this.value.replace(/[^0-9]/g,'')"></div>
-    <div class="field"><label>휴대폰 번호 (- 없이 숫자만)</label><input id="editPhone" value="${me.phone}" inputmode="tel" maxlength="11"></div>
-    <div class="field"><label>가장 기억에 남는 은사님 — PIN 잊었을 때 본인확인용</label><input id="editHint" value="${me.hint||''}" placeholder="예: 3학년 담임 김OO 선생님"></div>
+    <div class="field"><label>기수</label><input id="editBatch" value="${esc(me.batch||'')}" inputmode="numeric" maxlength="3" oninput="this.value=this.value.replace(/[^0-9]/g,'')"></div>
+    <div class="field"><label>휴대폰 번호 (- 없이 숫자만)</label><input id="editPhone" value="${esc(me.phone)}" inputmode="tel" maxlength="11"></div>
+    <div class="field"><label>가장 기억에 남는 은사님 — PIN 잊었을 때 본인확인용</label><input id="editHint" value="${esc(me.hint||'')}" placeholder="예: 3학년 담임 김OO 선생님"></div>
     <div class="field"><label>새 PIN (변경할 때만 입력)</label><input id="editPin" inputmode="numeric" maxlength="4" placeholder="비워두면 기존 PIN 유지"></div>
     <button class="btn btn-accent btn-block" onclick="saveProfileEdit()">저장</button>
   `);
@@ -1555,7 +1587,7 @@ function startCommentsListener(type, id){
   stopCommentsListener();
   window._cUnsub = db.collection('comments').where('targetKey', '==', type + '_' + id).onSnapshot(snap => {
     const me = currentMember();
-    const arr = snap.docs.map(d => ({ id: d.id, ...d.data() })).sort((a, b) => a.createdAt - b.createdAt);
+    const arr = snap.docs.map(d => neutralize({ id: d.id, ...d.data() })).sort((a, b) => a.createdAt - b.createdAt);
     const el = document.getElementById(`cmtList-${type}-${id}`);
     if(!el) return;
     el.innerHTML = arr.length ? `<div class="comment-list">${arr.map(c => `
@@ -3472,7 +3504,7 @@ function startEntriesListeners(){
     const nid = box.getAttribute('data-nid');
     if(!entryUnsubs[nid]){
       entryUnsubs[nid] = db.collection('noticeEntries').where('noticeId', '==', nid).onSnapshot(snap => {
-        entryStore[nid] = snap.docs.map(d => ({ id: d.id, ...d.data() })).sort((a,b) => a.createdAt - b.createdAt);
+        entryStore[nid] = snap.docs.map(d => neutralize({ id: d.id, ...d.data() })).sort((a,b) => a.createdAt - b.createdAt);
         renderEntryBoxes(nid);
       }, err => { console.error('[entries]', err); entryStore[nid] = entryStore[nid] || []; renderEntryBoxes(nid); });
     } else if(entryStore[nid]) renderEntryBoxes(nid);
@@ -4711,7 +4743,7 @@ function meetupCard(mt){
           ${groups.length ? groups.map(g=>`<span class="badge badge-open" style="margin:2px 4px 6px 0; display:inline-block;">${g}</span>`).join('') : ''}
           <p class="meetup-meta">
             📅 ${fmtDateKR(mt.date)} · ${mt.time}<br>
-            📍 ${mt.location}${mt.mapUrl ? ` · <a href="${mt.mapUrl}" target="_blank" rel="noopener" class="link-btn">지도보기</a>` : ''}<br>
+            📍 ${mt.location}${/^https?:\/\//i.test(String(mt.mapUrl||'').trim()) ? ` · <a href="${esc(String(mt.mapUrl).trim())}" target="_blank" rel="noopener" class="link-btn">지도보기</a>` : ''}<br>
             👥 ${confirmed}${mt.capacity>0 ? '/'+mt.capacity : '명'} 참여${mt.participants.filter(p=>p.status==='waiting').length ? ` · 대기 ${mt.participants.filter(p=>p.status==='waiting').length}명` : ''}
           </p>
           ${mt.info ? `<p class="post-content" style="margin-top:8px;">${mt.info.replace(/\n/g,'<br>')}</p>` : ''}
@@ -4910,10 +4942,10 @@ function startMessageListeners(){
           showToast('✉ 새 쪽지: ' + memberDisplayName(m.fromId));
         });
       }
-      msgIn = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+      msgIn = snap.docs.map(d => neutralize({ id: d.id, ...d.data() }));
       msgInitDone = true;
     } else {
-      msgOut = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+      msgOut = snap.docs.map(d => neutralize({ id: d.id, ...d.data() }));
     }
     renderMsgBell(); refreshMsgUi();
   };
